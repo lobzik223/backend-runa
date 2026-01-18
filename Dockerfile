@@ -52,8 +52,10 @@ RUN npm ci --only=production && \
 # Установка Prisma CLI глобально для миграций
 RUN npm install -g prisma@^6.2.0
 
-# Python зависимости для tinkoff_service.py
-RUN pip3 install --no-cache-dir tinkoff-investments
+# Обновление pip и установка Python зависимостей для tinkoff_service.py
+RUN pip3 install --upgrade pip setuptools wheel && \
+    pip3 install --no-cache-dir tinkoff-investments || \
+    (pip3 install --no-cache-dir --upgrade pip && pip3 install --no-cache-dir tinkoff-investments)
 
 # Копирование собранного приложения из builder
 COPY --from=builder /app/dist ./dist
