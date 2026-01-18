@@ -27,7 +27,7 @@ FROM node:20-bookworm-slim AS production
 # Установка рабочей директории
 WORKDIR /app
 
-# Системные зависимости + Python для Tinkoff Invest (python script).
+# Системные зависимости
 RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
     tzdata \
@@ -49,11 +49,6 @@ RUN npm ci --only=production && \
 
 # Установка Prisma CLI глобально для миграций
 RUN npm install -g prisma@^6.2.0
-
-# Обновление pip и установка Python зависимостей для tinkoff_service.py
-# Устанавливаем tinkoff-investments напрямую из GitHub репозитория
-RUN pip3 install --upgrade pip setuptools wheel && \
-    pip3 install --no-cache-dir git+https://github.com/Tinkoff/invest-python.git
 
 # Копирование собранного приложения из builder
 COPY --from=builder /app/dist ./dist
