@@ -36,8 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Создание непривилегированного пользователя
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nestjs -u 1001
+RUN groupadd --gid 1001 nodejs && \
+    useradd --system --uid 1001 --gid nodejs --shell /bin/false --create-home nestjs
 
 # Копирование файлов зависимостей
 COPY package*.json ./
