@@ -1,0 +1,11 @@
+ВАЖНО! Добавьте эту строку в файл .env:
+
+TINKOFF_DEMO_TOKEN=t.Zj9_ccQSjsQuuADA7Ck5X-j_LfbFQSfpXAu7qzEb_K5Xc7qhIujXDAIPDPeR-WehfB7KhIkVXHjdzy92Op1t2Q
+
+Инструкция:
+1. Откройте файл backend-runa\.env
+2. Добавьте в конец файла строку выше
+3. Сохраните файл
+4. Перезапустите backend: npm run dev
+
+После этого поиск акций и все функции заработают!

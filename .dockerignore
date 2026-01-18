@@ -1,0 +1,60 @@
+# Зависимости
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Сборка
+dist
+build
+*.tsbuildinfo
+
+# Тестирование
+coverage
+.nyc_output
+*.test.ts
+*.spec.ts
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Документация
+README.md
+docs
+
+# Окружение
+.env
+.env.local
+.env.*.local
+
+# Логи
+logs
+*.log
+
+# Временные файлы
+.tmp
+.temp
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Expo (если есть)
+.expo
+
+# Jest
+jest.config.cjs

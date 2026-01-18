@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: runa_postgres
+    environment:
+      POSTGRES_DB: runa
+      POSTGRES_USER: runa
+      POSTGRES_PASSWORD: runa_password_change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - runa_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runa -d runa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - runa_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: runa_redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - runa_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - runa_network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: runa_backend
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_PREFIX: /api
+      DATABASE_URL: postgresql://runa:runa_password_change_me@postgres:5432/runa?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-change_me_access_secret_32+chars_minimum}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change_me_refresh_secret_32+chars_minimum}
+      JWT_ACCESS_TTL_SECONDS: ${JWT_ACCESS_TTL_SECONDS:-900}
+      JWT_REFRESH_TTL_SECONDS: ${JWT_REFRESH_TTL_SECONDS:-2592000}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      THROTTLE_TTL_SECONDS: ${THROTTLE_TTL_SECONDS:-60}
+      THROTTLE_LIMIT: ${THROTTLE_LIMIT:-30}
+      APP_KEY: ${APP_KEY:-runa_dev_app_key_change_me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - runa_network
+    restart: unless-stopped
+    volumes:
+      # Монтируем prisma для миграций (опционально)
+      - ./prisma:/app/prisma:ro
+
+volumes:
+  runa_pgdata:
+  runa_redisdata:
+
+networks:
+  runa_network:
+    driver: bridge

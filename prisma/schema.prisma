@@ -1,0 +1,640 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+enum PaymentMethodType {
+  CASH
+  DEBIT_CARD
+  CREDIT_CARD
+  BANK_ACCOUNT
+  OTHER
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum CreditAccountKind {
+  CREDIT_CARD
+  LOAN
+}
+
+enum DepositPayoutSchedule {
+  MONTHLY
+  QUARTERLY
+  AT_MATURITY
+  CUSTOM
+}
+
+enum ScheduledEventKind {
+  CREDIT_PAYMENT
+  DEPOSIT_INTEREST
+  GOAL_CONTRIBUTION
+  TRANSACTION_REMINDER
+  CUSTOM
+}
+
+enum ScheduledEventStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELED
+}
+
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  CANCELED
+}
+
+enum InvestmentAssetType {
+  STOCK
+  BOND
+  ETF
+  CRYPTO
+  OTHER
+}
+
+enum AiRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+enum SubscriptionStore {
+  INTERNAL
+  APPLE
+  GOOGLE
+}
+
+enum SubscriptionStatus {
+  NONE
+  ACTIVE
+  EXPIRED
+  CANCELED
+  GRACE
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String?  @unique
+  phoneE164    String?  @unique
+  name         String
+  passwordHash String?
+
+  // Trial and Premium tracking
+  trialUntil   DateTime? // Free trial end date
+  premiumUntil DateTime? // Premium subscription end date
+
+  // Tinkoff Invest integration
+  tinkoffToken String? // Encrypted Tinkoff Invest API token (stored securely)
+  tinkoffUseSandbox Boolean @default(false) // Use sandbox environment
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  nameUpdatedAt DateTime @default(now())
+
+  refreshSessions RefreshSession[]
+  pinSecurity     PinSecurity?
+
+  categories     Category[]
+  paymentMethods PaymentMethod[]
+  transactions   Transaction[]
+
+  creditAccounts   CreditAccount[]
+  depositAccounts  DepositAccount[]
+  scheduledEvents  ScheduledEvent[]
+
+  goals            Goal[]
+  goalContributions GoalContribution[]
+
+  investmentAssets InvestmentAsset[]
+  investmentLots   InvestmentLot[]
+
+  referralCode    ReferralCode?
+  subscription    Subscription?
+  aiThreads       AiThread[]
+  aiMessages      AiMessage[]
+  aiInsights      AiInsight[]
+  devices         Device[]
+
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Device {
+  id String @id @default(uuid())
+
+  deviceId String // stable device identifier from mobile (install-level)
+  platform String? // ios | android | web
+
+  userId Int?
+  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  ip        String?
+  userAgent String?
+
+  // Push notification token (FCM for Android, APNs for iOS)
+  pushToken String?
+  pushTokenUpdatedAt DateTime?
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([deviceId])
+  @@index([userId])
+  @@index([lastSeenAt])
+  @@map("devices")
+}
+
+model PhoneOtp {
+  id String @id @default(uuid())
+
+  phoneE164 String
+  codeHash  String
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  consumedAt DateTime?
+
+  attempts Int @default(0)
+
+  deviceId String?
+  ip       String?
+
+  @@index([phoneE164, createdAt])
+  @@index([expiresAt])
+  @@map("phone_otps")
+}
+
+model RefreshSession {
+  id            String   @id @default(uuid()) // also used as JWT refresh "jti"
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  revokedAt     DateTime?
+  replacedById  String?
+  replacedBy    RefreshSession? @relation("RefreshSessionReplacement", fields: [replacedById], references: [id])
+  replacements  RefreshSession[] @relation("RefreshSessionReplacement")
+
+  ip        String?
+  userAgent String?
+
+  @@index([userId, expiresAt])
+  @@index([revokedAt])
+  @@map("refresh_sessions")
+}
+
+model ReferralCode {
+  id        String @id @default(uuid())
+  userId    Int    @unique
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String @unique
+  createdAt DateTime @default(now())
+
+  redemptions ReferralRedemption[]
+  @@map("referral_codes")
+}
+
+model ReferralRedemption {
+  id            String   @id @default(uuid())
+  codeId        String
+  code          ReferralCode @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  inviterUserId Int
+  inviteeUserId Int
+  deviceId      String?
+  ip            String?
+  createdAt     DateTime @default(now())
+
+  @@unique([inviterUserId, inviteeUserId])
+  @@unique([inviteeUserId])
+  @@index([deviceId])
+  @@index([ip, createdAt])
+  @@index([createdAt])
+  @@map("referral_redemptions")
+}
+
+model Subscription {
+  id        String @id @default(uuid())
+  userId    Int    @unique
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status           SubscriptionStatus @default(NONE)
+  store            SubscriptionStore?
+  productId        String?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  autoRenew          Boolean?
+
+  // Store-specific identifiers (optional, but recommended for reconciliation)
+  appleOriginalTransactionId String?
+  googlePurchaseToken        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events SubscriptionEvent[]
+  @@map("subscriptions")
+}
+
+model SubscriptionEvent {
+  id             String   @id @default(uuid())
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  type           String
+  payload        Json
+  createdAt      DateTime @default(now())
+
+  @@index([subscriptionId, createdAt])
+  @@map("subscription_events")
+}
+
+model PinSecurity {
+  userId Int @id
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  pinHash        String
+  pinLength      Int      @default(4) // 4 or 6
+  biometricEnabled Boolean @default(false)
+  failedAttempts Int      @default(0)
+  lockedUntil    DateTime?
+  lastVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("pin_security")
+}
+
+model Category {
+  id Int @id @default(autoincrement())
+
+  type CategoryType
+  name String
+  iconKey String?
+  sortOrder Int @default(0)
+  isSystem Boolean @default(false)
+
+  userId Int?
+  user   User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  parentId Int?
+  parent   Category? @relation("CategoryParent", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryParent")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId, type])
+  @@index([type, isSystem])
+  @@unique([userId, type, name])
+  @@map("categories")
+}
+
+model PaymentMethod {
+  id Int @id @default(autoincrement())
+
+  type PaymentMethodType
+  name String
+  iconKey String?
+  sortOrder Int @default(0)
+  isSystem Boolean @default(false)
+
+  userId Int?
+  user   User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Optional link to credit account when type == CREDIT_CARD
+  creditAccountId Int?
+  creditAccount   CreditAccount? @relation(fields: [creditAccountId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId])
+  @@index([type, isSystem])
+  @@index([creditAccountId])
+  @@unique([userId, type, name])
+  @@map("payment_methods")
+}
+
+model Transaction {
+  id BigInt @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type     TransactionType
+  amount   Decimal @db.Decimal(18, 2)
+  currency String  @default("RUB")
+
+  occurredAt DateTime
+  note       String?
+
+  categoryId Int?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  paymentMethodId Int?
+  paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, occurredAt])
+  @@index([userId, type, occurredAt])
+  @@index([categoryId])
+  @@index([paymentMethodId])
+  @@map("transactions")
+}
+
+model CreditAccount {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind     CreditAccountKind
+  name     String
+  currency String @default("RUB")
+
+  // For LOAN: principal is original loan amount.
+  principal      Decimal? @db.Decimal(18, 2)
+  currentBalance Decimal  @db.Decimal(18, 2)
+
+  // For CREDIT_CARD: optional limit/billing day.
+  creditLimit Decimal? @db.Decimal(18, 2)
+  billingDay  Int?
+
+  interestRate Decimal? @db.Decimal(6, 3) // percent, e.g. 12.500
+  paymentDay   Int?
+  nextPaymentAt DateTime?
+  minimumPayment Decimal? @db.Decimal(18, 2)
+
+  openedAt DateTime?
+  closedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  scheduledEvents ScheduledEvent[]
+  paymentMethods PaymentMethod[]
+
+  @@index([userId, kind])
+  @@map("credit_accounts")
+}
+
+model DepositAccount {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name     String
+  currency String @default("RUB")
+
+  principal    Decimal @db.Decimal(18, 2)
+  interestRate Decimal @db.Decimal(6, 3) // percent
+  payoutSchedule DepositPayoutSchedule @default(MONTHLY)
+
+  nextPayoutAt DateTime?
+  maturityAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  scheduledEvents ScheduledEvent[]
+
+  @@index([userId])
+  @@map("deposit_accounts")
+}
+
+model ScheduledEvent {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind   ScheduledEventKind
+  status ScheduledEventStatus @default(SCHEDULED)
+
+  dueAt    DateTime
+  amount   Decimal? @db.Decimal(18, 2)
+  currency String  @default("RUB")
+  note     String?
+
+  // RFC5545 RRULE string for recurrence (optional)
+  rrule String?
+  lastRunAt DateTime?
+
+  // Push notification tracking
+  lastNotifiedAt DateTime? // Last time push notification was sent (for deduplication)
+
+  creditAccountId Int?
+  creditAccount   CreditAccount? @relation(fields: [creditAccountId], references: [id], onDelete: Cascade)
+
+  depositAccountId Int?
+  depositAccount   DepositAccount? @relation(fields: [depositAccountId], references: [id], onDelete: Cascade)
+
+  goalId Int?
+  goal   Goal? @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status, dueAt])
+  @@index([dueAt])
+  @@map("scheduled_events")
+}
+
+model Goal {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name         String
+  targetAmount Decimal @db.Decimal(18, 2)
+  currency     String  @default("RUB")
+  targetDate   DateTime?
+  status       GoalStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contributions   GoalContribution[]
+  scheduledEvents ScheduledEvent[]
+
+  @@index([userId, status])
+  @@map("goals")
+}
+
+model GoalContribution {
+  id BigInt @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  goalId Int
+  goal   Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  amount   Decimal @db.Decimal(18, 2)
+  currency String  @default("RUB")
+  occurredAt DateTime @default(now())
+  note       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([goalId, occurredAt])
+  @@index([userId, occurredAt])
+  @@map("goal_contributions")
+}
+
+model InvestmentAsset {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  symbol   String
+  name     String
+  assetType InvestmentAssetType
+  currency String @default("RUB")
+  exchange String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lots InvestmentLot[]
+
+  @@unique([userId, symbol])
+  @@index([userId, assetType])
+  @@map("investment_assets")
+}
+
+model InvestmentLot {
+  id BigInt @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assetId Int
+  asset   InvestmentAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  quantity     Decimal @db.Decimal(20, 8)
+  pricePerUnit Decimal @db.Decimal(18, 6)
+  fees         Decimal @db.Decimal(18, 2) @default(0)
+
+  boughtAt DateTime
+
+  soldAt DateTime?
+  soldPricePerUnit Decimal? @db.Decimal(18, 6)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([assetId, boughtAt])
+  @@index([userId, boughtAt])
+  @@map("investment_lots")
+}
+
+model AiThread {
+  id String @id @default(uuid())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages AiMessage[]
+
+  @@index([userId, createdAt])
+  @@map("ai_threads")
+}
+
+model AiMessage {
+  id String @id @default(uuid())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  threadId String
+  thread   AiThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  role    AiRole
+  content String
+
+  // optional usage tracking
+  model     String?
+  tokensIn  Int?
+  tokensOut Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([threadId, createdAt])
+  @@index([userId, createdAt])
+  @@map("ai_messages")
+}
+
+model MarketNews {
+  id String @id @default(uuid())
+
+  title       String
+  content     String @db.Text
+  source      String? // e.g., "RBC", "TASS", "MOEX"
+  sourceUrl   String?
+  publishedAt DateTime
+
+  // For deduplication
+  externalId String? @unique // ID from external API if available
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([publishedAt])
+  @@index([createdAt])
+  @@map("market_news")
+}
+
+model AiInsight {
+  id String @id @default(uuid())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type     String // 'expense_spike' | 'budget_deficit' | 'inactivity' | 'goal_achieved' | 'plan_violation'
+  title    String
+  message  String @db.Text
+  severity String @default("info") // 'info' | 'warning' | 'critical'
+
+  metadata Json? // Additional data (e.g., spike percentage, days inactive)
+
+  acknowledgedAt DateTime?
+  pushSentAt     DateTime? // When push notification was sent
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, acknowledgedAt])
+  @@map("ai_insights")
+}
