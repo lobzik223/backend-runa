@@ -53,9 +53,9 @@ RUN npm ci --only=production && \
 RUN npm install -g prisma@^6.2.0
 
 # Обновление pip и установка Python зависимостей для tinkoff_service.py
+# Устанавливаем tinkoff-investments напрямую из GitHub репозитория
 RUN pip3 install --upgrade pip setuptools wheel && \
-    pip3 install --no-cache-dir tinkoff-investments || \
-    (pip3 install --no-cache-dir --upgrade pip && pip3 install --no-cache-dir tinkoff-investments)
+    pip3 install --no-cache-dir git+https://github.com/Tinkoff/invest-python.git
 
 # Копирование собранного приложения из builder
 COPY --from=builder /app/dist ./dist
