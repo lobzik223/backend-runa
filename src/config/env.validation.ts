@@ -27,10 +27,6 @@ const envSchema = z.object({
   // If set, every request (except /api/health) must include header: X-Runa-App-Key
   APP_KEY: z.string().min(8).optional(),
 
-  // Tinkoff Invest Demo Mode
-  // Общий токен для демо-режима (песочница Tinkoff Invest)
-  // Если установлен, все пользователи могут использовать демо-инвестиции без своего токена
-  TINKOFF_DEMO_TOKEN: z.string().min(1).optional(),
 });
 
 export const env = envSchema.parse(process.env);

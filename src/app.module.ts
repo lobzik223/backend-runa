@@ -15,7 +15,6 @@ import { MarketNewsModule } from './modules/market-news/market-news.module';
 import { AIChatModule } from './modules/ai-chat/ai-chat.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { GoalsModule } from './modules/goals/goals.module';
-import { TinkoffInvestModule } from './modules/tinkoff-invest/tinkoff-invest.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { env } from './config/env.validation';
 
@@ -44,7 +43,6 @@ import { env } from './config/env.validation';
     AIChatModule,
     SubscriptionsModule,
     GoalsModule,
-    TinkoffInvestModule,
   ],
 })
 export class AppModule {}

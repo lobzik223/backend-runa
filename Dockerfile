@@ -32,9 +32,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
     tzdata \
     ca-certificates \
-    python3 \
-    python3-pip \
-    git \
     netcat-openbsd \
   && rm -rf /var/lib/apt/lists/*
 
@@ -61,9 +58,6 @@ RUN pip3 install --upgrade pip setuptools wheel && \
 # Копирование собранного приложения из builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-
-# Копирование Python-скрипта (в Docker он живет здесь)
-COPY python ./python
 
 # Копирование entrypoint скрипта
 COPY docker-entrypoint.sh /usr/local/bin/

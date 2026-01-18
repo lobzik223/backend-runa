@@ -97,9 +97,6 @@ model User {
   trialUntil   DateTime? // Free trial end date
   premiumUntil DateTime? // Premium subscription end date
 
-  // Tinkoff Invest integration
-  tinkoffToken String? // Encrypted Tinkoff Invest API token (stored securely)
-  tinkoffUseSandbox Boolean @default(false) // Use sandbox environment
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
