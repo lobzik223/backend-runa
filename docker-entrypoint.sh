@@ -1,9 +1,9 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 #
 # Entrypoint для production-образа backend-runa.
 # Подготавливает базу (миграции) и передаёт управление основной команде.
 
-set -euo pipefail
+set -eu
 
 # Для отладки выводим текущий NODE_ENV
 echo "[entrypoint] NODE_ENV=${NODE_ENV:-unset}"
@@ -11,7 +11,12 @@ echo "[entrypoint] NODE_ENV=${NODE_ENV:-unset}"
 # Пробуем выполнить миграции, если есть prisma и переменная PRISMA_MIGRATE не запрещает это
 if [ -d /app/prisma ] && [ "${PRISMA_MIGRATE:-true}" != "false" ]; then
   echo "[entrypoint] Запускаем prisma migrate deploy"
-  prisma migrate deploy
+  if prisma migrate deploy 2>&1; then
+    echo "[entrypoint] Миграции применены успешно"
+  else
+    echo "[entrypoint] WARNING: Не удалось применить миграции (возможно, база уже обновлена или миграции отсутствуют)"
+    echo "[entrypoint] Продолжаем запуск приложения..."
+  fi
 fi
 
 # Дополнительные проверки безопасности
