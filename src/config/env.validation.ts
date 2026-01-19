@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
-const envSchema = z.object({
+const envSchema = z
+  .object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   API_PREFIX: z.string().default('/api'),
@@ -27,7 +28,17 @@ const envSchema = z.object({
   // If set, every request (except /api/health) must include header: X-Runa-App-Key
   APP_KEY: z.string().min(8).optional(),
 
-});
+  })
+  .superRefine((v, ctx) => {
+    // В проде всегда требуем APP_KEY, чтобы API не был открыт “наружу”.
+    if (v.NODE_ENV === 'production' && !v.APP_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['APP_KEY'],
+        message: 'APP_KEY is required in production',
+      });
+    }
+  });
 
 export const env = envSchema.parse(process.env);
 export type Env = z.infer<typeof envSchema>;
