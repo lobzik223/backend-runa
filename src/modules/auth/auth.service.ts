@@ -465,11 +465,8 @@ export class AuthService {
     const newSessionId = randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
 
+    // Сначала создаём новую сессию, потом обновляем старую (чтобы внешний ключ работал)
     await this.prisma.$transaction([
-      this.prisma.refreshSession.update({
-        where: { id: sessionId },
-        data: { revokedAt: new Date(), replacedById: newSessionId },
-      }),
       this.prisma.refreshSession.create({
         data: {
           id: newSessionId,
@@ -478,6 +475,10 @@ export class AuthService {
           ip: meta?.ip,
           userAgent: meta?.userAgent,
         },
+      }),
+      this.prisma.refreshSession.update({
+        where: { id: sessionId },
+        data: { revokedAt: new Date(), replacedById: newSessionId },
       }),
     ]);
 
