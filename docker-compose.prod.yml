@@ -50,17 +50,21 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: backend-runa-backend
     container_name: runa_backend_prod
     ports:
       - "127.0.0.1:3000:3000"  # Только localhost, доступ через nginx/reverse proxy
     env_file:
-      - .env.production
+      - .env
     environment:
       NODE_ENV: production
       PORT: 3000
       API_PREFIX: /api
       DATABASE_URL: postgresql://${POSTGRES_USER:-runa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-runa}?schema=public
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
+      # Timeweb Cloud AI для RUNA AI чата
+      TIMEWEB_AI_ACCESS_ID: ${TIMEWEB_AI_ACCESS_ID:-009e0398-152a-4a94-84f0-65f32c7aacdc}
+      TIMEWEB_AI_API_URL: ${TIMEWEB_AI_API_URL:-https://agent.timeweb.cloud/api/v1/cloud-ai/agents/009e0398-152a-4a94-84f0-65f32c7aacdc/v1}
     depends_on:
       postgres:
         condition: service_healthy
