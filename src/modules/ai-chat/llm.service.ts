@@ -25,6 +25,24 @@ export class LLMService {
   private readonly openaiApiKey = process.env.OPENAI_API_KEY;
   private readonly openaiModel = process.env.OPENAI_MODEL || 'gpt-5-nano';
   
+  constructor() {
+    // Логируем конфигурацию при инициализации
+    this.logger.log(`[LLM Service] Initializing...`);
+    this.logger.log(`[LLM Service] TIMEWEB_AI_ACCESS_ID: ${this.timewebAccessId ? `${this.timewebAccessId.substring(0, 8)}...` : 'NOT SET'}`);
+    this.logger.log(`[LLM Service] TIMEWEB_AI_API_URL: ${this.timewebApiUrl || 'NOT SET'}`);
+    this.logger.log(`[LLM Service] OPENAI_API_KEY: ${this.openaiApiKey ? 'SET' : 'NOT SET'}`);
+    
+    if (this.timewebAccessId) {
+      this.logger.log(`[LLM Service] ✅ Timeweb AI настроен: Access ID = ${this.timewebAccessId.substring(0, 8)}...`);
+      this.logger.log(`[LLM Service] ✅ Timeweb AI URL: ${this.timewebApiUrl}`);
+    } else if (this.timewebApiUrl && this.timewebApiUrl.includes('timeweb')) {
+      this.logger.log(`[LLM Service] ✅ Timeweb AI настроен через URL: ${this.timewebApiUrl}`);
+    } else {
+      this.logger.warn(`[LLM Service] ⚠️ Timeweb AI не настроен: отсутствуют TIMEWEB_AI_ACCESS_ID и TIMEWEB_AI_API_URL`);
+      this.logger.warn(`[LLM Service] ⚠️ Будет использован stub режим (автоответчик)`);
+    }
+  }
+  
   private get useTimewebAI(): boolean {
     return !!this.timewebAccessId || !!this.timewebApiUrl;
   }
@@ -38,7 +56,10 @@ export class LLMService {
     financeContext: any,
   ): Promise<LLMResponse> {
     // Check if we have any AI provider configured
+    this.logger.log(`[LLM] Checking AI providers: useTimewebAI=${this.useTimewebAI}, hasOpenAI=${!!this.openaiApiKey}`);
+    
     if (!this.useTimewebAI && !this.openaiApiKey) {
+      this.logger.warn('[LLM] No AI provider configured, using stub mode');
       // Stub mode - return formatted structured outputs
       return this.generateStubResponse(structuredOutputs);
     }
@@ -46,14 +67,19 @@ export class LLMService {
     // Real LLM integration
     try {
       if (this.useTimewebAI) {
+        this.logger.log('[LLM] Using Timeweb AI');
         return await this.callTimewebAI(userMessage, structuredOutputs, financeContext);
       } else if (this.openaiApiKey) {
+        this.logger.log('[LLM] Using OpenAI');
         return await this.callOpenAI(userMessage, structuredOutputs, financeContext);
       }
+      this.logger.warn('[LLM] No provider selected, using stub');
       return this.generateStubResponse(structuredOutputs);
     } catch (error) {
-      this.logger.error(`LLM error: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.error(`[LLM] Error: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.error(`[LLM] Stack: ${error instanceof Error ? error.stack : 'No stack'}`);
       // Fallback to stub
+      this.logger.warn('[LLM] Falling back to stub mode due to error');
       return this.generateStubResponse(structuredOutputs);
     }
   }
@@ -63,6 +89,11 @@ export class LLMService {
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
   ): Promise<LLMResponse> {
+    // Проверяем наличие необходимых переменных
+    if (!this.timewebAccessId && !this.timewebApiUrl) {
+      throw new Error('Timeweb AI не настроен: отсутствуют TIMEWEB_AI_ACCESS_ID или TIMEWEB_AI_API_URL');
+    }
+
     // Формируем детальный контекст о транзакциях
     const recentTransactionsText = financeContext.recentTransactions
       .slice(0, 15)
@@ -146,22 +177,41 @@ ${structuredOutputs.length > 0
 `.trim();
 
     try {
+      const apiUrl = `${this.timewebApiUrl}/chat/completions`;
+      this.logger.log(`[Timeweb AI] Calling API: ${apiUrl}`);
+      
+      // Формируем заголовки с авторизацией
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      // Добавляем заголовки авторизации, если есть Access ID
+      if (this.timewebAccessId) {
+        headers['Authorization'] = `Bearer ${this.timewebAccessId}`;
+        headers['X-Access-Id'] = this.timewebAccessId;
+        this.logger.log(`[Timeweb AI] Using authorization headers with Access ID: ${this.timewebAccessId.substring(0, 8)}...`);
+      }
+      
+      const requestBody = {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+        temperature: 0.7,
+        max_tokens: 500,
+      };
+
+      this.logger.log(`[Timeweb AI] Request body: model=${requestBody.model}, messages=${requestBody.messages.length}, prompt_length=${systemPrompt.length}`);
+
       // Timeweb Cloud AI использует OpenAI-совместимый API
-      const response = await fetch(this.timewebApiUrl + '/chat/completions', {
+      const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini', // Timeweb Cloud AI использует стандартные модели
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userMessage },
-          ],
-          temperature: 0.7,
-          max_tokens: 500,
-        }),
+        headers,
+        body: JSON.stringify(requestBody),
       });
+
+      this.logger.log(`[Timeweb AI] Response status: ${response.status} ${response.statusText}`);
 
       if (!response.ok) {
         const errText = await response.text();
@@ -171,11 +221,72 @@ ${structuredOutputs.length > 0
         } catch {
           errData = { message: errText };
         }
+        this.logger.error(`[Timeweb AI] API error (${response.status}): ${JSON.stringify(errData)}`);
+        
+        // Если ошибка авторизации, попробуем альтернативные варианты
+        if ((response.status === 401 || response.status === 403) && this.timewebAccessId) {
+          this.logger.log(`[Timeweb AI] Trying alternative authorization methods...`);
+          
+          // Вариант 1: Только Authorization без X-Access-Id
+          const headersAlt1: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.timewebAccessId}`,
+          };
+          
+          const retryResponse1 = await fetch(apiUrl, {
+            method: 'POST',
+            headers: headersAlt1,
+            body: JSON.stringify(requestBody),
+          });
+          
+          if (retryResponse1.ok) {
+            const retryData: any = await retryResponse1.json();
+            const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
+            this.logger.log(`[Timeweb AI] Success with Authorization header only, tokens: ${retryData.usage?.total_tokens || 0}`);
+            return {
+              text: retryText,
+              tokensUsed: {
+                input: retryData.usage?.prompt_tokens || 0,
+                output: retryData.usage?.completion_tokens || 0,
+              },
+              model: 'timeweb-cloud-ai',
+            };
+          }
+          
+          // Вариант 2: Только X-Access-Id
+          const headersAlt2: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-Access-Id': this.timewebAccessId,
+          };
+          
+          const retryResponse2 = await fetch(apiUrl, {
+            method: 'POST',
+            headers: headersAlt2,
+            body: JSON.stringify(requestBody),
+          });
+          
+          if (retryResponse2.ok) {
+            const retryData: any = await retryResponse2.json();
+            const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
+            this.logger.log(`[Timeweb AI] Success with X-Access-Id header only, tokens: ${retryData.usage?.total_tokens || 0}`);
+            return {
+              text: retryText,
+              tokensUsed: {
+                input: retryData.usage?.prompt_tokens || 0,
+                output: retryData.usage?.completion_tokens || 0,
+              },
+              model: 'timeweb-cloud-ai',
+            };
+          }
+        }
+        
         throw new Error(`Timeweb AI API error: ${JSON.stringify(errData)}`);
       }
 
       const data: any = await response.json();
       const text = data.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
+
+      this.logger.log(`[Timeweb AI] Success! Response length: ${text.length}, tokens: ${data.usage?.total_tokens || 0}`);
 
       return {
         text,
