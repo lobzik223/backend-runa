@@ -19,6 +19,7 @@ export class LLMService {
   private readonly logger = new Logger(LLMService.name);
   // Timeweb Cloud AI configuration
   private readonly timewebAccessId = process.env.TIMEWEB_AI_ACCESS_ID;
+  private readonly timewebApiKey = process.env.TIMEWEB_AI_API_KEY;
   private readonly timewebApiUrl = process.env.TIMEWEB_AI_API_URL || 
     `https://agent.timeweb.cloud/api/v1/cloud-ai/agents/${process.env.TIMEWEB_AI_ACCESS_ID || '009e0398-152a-4a94-84f0-65f32c7aacdc'}/v1`;
   // Legacy OpenAI support
@@ -29,6 +30,7 @@ export class LLMService {
     // Логируем конфигурацию при инициализации
     this.logger.log(`[LLM Service] Initializing...`);
     this.logger.log(`[LLM Service] TIMEWEB_AI_ACCESS_ID: ${this.timewebAccessId ? `${this.timewebAccessId.substring(0, 8)}...` : 'NOT SET'}`);
+    this.logger.log(`[LLM Service] TIMEWEB_AI_API_KEY: ${this.timewebApiKey ? 'SET' : 'NOT SET'}`);
     this.logger.log(`[LLM Service] TIMEWEB_AI_API_URL: ${this.timewebApiUrl || 'NOT SET'}`);
     this.logger.log(`[LLM Service] OPENAI_API_KEY: ${this.openaiApiKey ? 'SET' : 'NOT SET'}`);
     
@@ -180,16 +182,22 @@ ${structuredOutputs.length > 0
       const apiUrl = `${this.timewebApiUrl}/chat/completions`;
       this.logger.log(`[Timeweb AI] Calling API: ${apiUrl}`);
       
-      // Формируем заголовки с авторизацией
+      // Формируем заголовки
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
 
-      // Добавляем заголовки авторизации, если есть Access ID
-      if (this.timewebAccessId) {
-        headers['Authorization'] = `Bearer ${this.timewebAccessId}`;
-        headers['X-Access-Id'] = this.timewebAccessId;
-        this.logger.log(`[Timeweb AI] Using authorization headers with Access ID: ${this.timewebAccessId.substring(0, 8)}...`);
+      // Пробуем разные варианты авторизации
+      // Вариант 1: Если есть API Key, используем его
+      if (this.timewebApiKey) {
+        headers['Authorization'] = `Bearer ${this.timewebApiKey}`;
+        headers['X-API-Key'] = this.timewebApiKey;
+        this.logger.log(`[Timeweb AI] Using API Key for authorization`);
+      } 
+      // Вариант 2: Если есть Access ID, пробуем его как ключ
+      else if (this.timewebAccessId) {
+        // Пробуем сначала без заголовков (Access ID уже в URL)
+        this.logger.log(`[Timeweb AI] Access ID in URL, trying without auth headers first`);
       }
       
       const requestBody = {
@@ -223,16 +231,17 @@ ${structuredOutputs.length > 0
         }
         this.logger.error(`[Timeweb AI] API error (${response.status}): ${JSON.stringify(errData)}`);
         
-        // Если ошибка авторизации, попробуем альтернативные варианты
+        // Если ошибка авторизации, пробуем альтернативные варианты
         if ((response.status === 401 || response.status === 403) && this.timewebAccessId) {
           this.logger.log(`[Timeweb AI] Trying alternative authorization methods...`);
           
-          // Вариант 1: Только Authorization без X-Access-Id
+          // Вариант 1: Authorization: Bearer с Access ID
           const headersAlt1: Record<string, string> = {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${this.timewebAccessId}`,
           };
           
+          this.logger.log(`[Timeweb AI] Trying Authorization: Bearer ${this.timewebAccessId.substring(0, 8)}...`);
           const retryResponse1 = await fetch(apiUrl, {
             method: 'POST',
             headers: headersAlt1,
@@ -242,7 +251,7 @@ ${structuredOutputs.length > 0
           if (retryResponse1.ok) {
             const retryData: any = await retryResponse1.json();
             const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
-            this.logger.log(`[Timeweb AI] Success with Authorization header only, tokens: ${retryData.usage?.total_tokens || 0}`);
+            this.logger.log(`[Timeweb AI] ✅ Success with Authorization header, tokens: ${retryData.usage?.total_tokens || 0}`);
             return {
               text: retryText,
               tokensUsed: {
@@ -253,12 +262,13 @@ ${structuredOutputs.length > 0
             };
           }
           
-          // Вариант 2: Только X-Access-Id
+          // Вариант 2: X-Access-Id
           const headersAlt2: Record<string, string> = {
             'Content-Type': 'application/json',
             'X-Access-Id': this.timewebAccessId,
           };
           
+          this.logger.log(`[Timeweb AI] Trying X-Access-Id header...`);
           const retryResponse2 = await fetch(apiUrl, {
             method: 'POST',
             headers: headersAlt2,
@@ -268,7 +278,7 @@ ${structuredOutputs.length > 0
           if (retryResponse2.ok) {
             const retryData: any = await retryResponse2.json();
             const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
-            this.logger.log(`[Timeweb AI] Success with X-Access-Id header only, tokens: ${retryData.usage?.total_tokens || 0}`);
+            this.logger.log(`[Timeweb AI] ✅ Success with X-Access-Id header, tokens: ${retryData.usage?.total_tokens || 0}`);
             return {
               text: retryText,
               tokensUsed: {
@@ -278,6 +288,35 @@ ${structuredOutputs.length > 0
               model: 'timeweb-cloud-ai',
             };
           }
+          
+          // Вариант 3: X-API-Key с Access ID
+          const headersAlt3: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-API-Key': this.timewebAccessId,
+          };
+          
+          this.logger.log(`[Timeweb AI] Trying X-API-Key header...`);
+          const retryResponse3 = await fetch(apiUrl, {
+            method: 'POST',
+            headers: headersAlt3,
+            body: JSON.stringify(requestBody),
+          });
+          
+          if (retryResponse3.ok) {
+            const retryData: any = await retryResponse3.json();
+            const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
+            this.logger.log(`[Timeweb AI] ✅ Success with X-API-Key header, tokens: ${retryData.usage?.total_tokens || 0}`);
+            return {
+              text: retryText,
+              tokensUsed: {
+                input: retryData.usage?.prompt_tokens || 0,
+                output: retryData.usage?.completion_tokens || 0,
+              },
+              model: 'timeweb-cloud-ai',
+            };
+          }
+          
+          this.logger.error(`[Timeweb AI] ❌ All authorization methods failed. Check your API credentials.`);
         }
         
         throw new Error(`Timeweb AI API error: ${JSON.stringify(errData)}`);
