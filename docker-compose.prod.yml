@@ -64,6 +64,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
       # Timeweb Cloud AI для RUNA AI чата
       TIMEWEB_AI_ACCESS_ID: ${TIMEWEB_AI_ACCESS_ID:-009e0398-152a-4a94-84f0-65f32c7aacdc}
+      TIMEWEB_AI_API_KEY: ${TIMEWEB_AI_API_KEY:-}
       TIMEWEB_AI_API_URL: ${TIMEWEB_AI_API_URL:-https://agent.timeweb.cloud/api/v1/cloud-ai/agents/009e0398-152a-4a94-84f0-65f32c7aacdc/v1}
     depends_on:
       postgres:
