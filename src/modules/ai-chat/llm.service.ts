@@ -182,22 +182,24 @@ ${structuredOutputs.length > 0
       const apiUrl = `${this.timewebApiUrl}/chat/completions`;
       this.logger.log(`[Timeweb AI] Calling API: ${apiUrl}`);
       
-      // Формируем заголовки
+      // Формируем заголовки согласно документации Timeweb AI API
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
+        'x-proxy-source': 'runa-finance', // Обязательный заголовок согласно документации
       };
 
-      // Пробуем разные варианты авторизации
-      // Вариант 1: Если есть API Key, используем его
+      // Согласно документации Timeweb AI API, требуется Authorization: Bearer <token>
+      // Вариант 1: Если есть API Key, используем его как Bearer token
       if (this.timewebApiKey) {
         headers['Authorization'] = `Bearer ${this.timewebApiKey}`;
-        headers['X-API-Key'] = this.timewebApiKey;
-        this.logger.log(`[Timeweb AI] Using API Key for authorization`);
+        this.logger.log(`[Timeweb AI] Using API Key as Bearer token for authorization`);
       } 
-      // Вариант 2: Если есть Access ID, пробуем его как ключ
+      // Вариант 2: Если нет API Key, пробуем Access ID как токен (может работать в некоторых случаях)
       else if (this.timewebAccessId) {
-        // Пробуем сначала без заголовков (Access ID уже в URL)
-        this.logger.log(`[Timeweb AI] Access ID in URL, trying without auth headers first`);
+        headers['Authorization'] = `Bearer ${this.timewebAccessId}`;
+        this.logger.log(`[Timeweb AI] Using Access ID as Bearer token (fallback, may not work)`);
+      } else {
+        this.logger.warn(`[Timeweb AI] No API Key or Access ID for authorization`);
       }
       
       const requestBody = {
@@ -231,92 +233,13 @@ ${structuredOutputs.length > 0
         }
         this.logger.error(`[Timeweb AI] API error (${response.status}): ${JSON.stringify(errData)}`);
         
-        // Если ошибка авторизации, пробуем альтернативные варианты
-        if ((response.status === 401 || response.status === 403) && this.timewebAccessId) {
-          this.logger.log(`[Timeweb AI] Trying alternative authorization methods...`);
-          
-          // Вариант 1: Authorization: Bearer с Access ID
-          const headersAlt1: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.timewebAccessId}`,
-          };
-          
-          this.logger.log(`[Timeweb AI] Trying Authorization: Bearer ${this.timewebAccessId.substring(0, 8)}...`);
-          const retryResponse1 = await fetch(apiUrl, {
-            method: 'POST',
-            headers: headersAlt1,
-            body: JSON.stringify(requestBody),
-          });
-          
-          if (retryResponse1.ok) {
-            const retryData: any = await retryResponse1.json();
-            const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
-            this.logger.log(`[Timeweb AI] ✅ Success with Authorization header, tokens: ${retryData.usage?.total_tokens || 0}`);
-            return {
-              text: retryText,
-              tokensUsed: {
-                input: retryData.usage?.prompt_tokens || 0,
-                output: retryData.usage?.completion_tokens || 0,
-              },
-              model: 'timeweb-cloud-ai',
-            };
-          }
-          
-          // Вариант 2: X-Access-Id
-          const headersAlt2: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'X-Access-Id': this.timewebAccessId,
-          };
-          
-          this.logger.log(`[Timeweb AI] Trying X-Access-Id header...`);
-          const retryResponse2 = await fetch(apiUrl, {
-            method: 'POST',
-            headers: headersAlt2,
-            body: JSON.stringify(requestBody),
-          });
-          
-          if (retryResponse2.ok) {
-            const retryData: any = await retryResponse2.json();
-            const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
-            this.logger.log(`[Timeweb AI] ✅ Success with X-Access-Id header, tokens: ${retryData.usage?.total_tokens || 0}`);
-            return {
-              text: retryText,
-              tokensUsed: {
-                input: retryData.usage?.prompt_tokens || 0,
-                output: retryData.usage?.completion_tokens || 0,
-              },
-              model: 'timeweb-cloud-ai',
-            };
-          }
-          
-          // Вариант 3: X-API-Key с Access ID
-          const headersAlt3: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'X-API-Key': this.timewebAccessId,
-          };
-          
-          this.logger.log(`[Timeweb AI] Trying X-API-Key header...`);
-          const retryResponse3 = await fetch(apiUrl, {
-            method: 'POST',
-            headers: headersAlt3,
-            body: JSON.stringify(requestBody),
-          });
-          
-          if (retryResponse3.ok) {
-            const retryData: any = await retryResponse3.json();
-            const retryText = retryData.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
-            this.logger.log(`[Timeweb AI] ✅ Success with X-API-Key header, tokens: ${retryData.usage?.total_tokens || 0}`);
-            return {
-              text: retryText,
-              tokensUsed: {
-                input: retryData.usage?.prompt_tokens || 0,
-                output: retryData.usage?.completion_tokens || 0,
-              },
-              model: 'timeweb-cloud-ai',
-            };
-          }
-          
-          this.logger.error(`[Timeweb AI] ❌ All authorization methods failed. Check your API credentials.`);
+        // Если ошибка авторизации, возможно нужен правильный API токен
+        if (response.status === 401 || response.status === 403) {
+          this.logger.error(`[Timeweb AI] ❌ Authorization failed. According to Timeweb AI API docs, you need:`);
+          this.logger.error(`[Timeweb AI] 1. Authorization: Bearer <token> header (required)`);
+          this.logger.error(`[Timeweb AI] 2. x-proxy-source header (required)`);
+          this.logger.error(`[Timeweb AI] 3. Get API token from Timeweb Cloud panel: https://timeweb.cloud/my/api-keys`);
+          this.logger.error(`[Timeweb AI] 4. Add it to .env as: TIMEWEB_AI_API_KEY=your_token_here`);
         }
         
         throw new Error(`Timeweb AI API error: ${JSON.stringify(errData)}`);
