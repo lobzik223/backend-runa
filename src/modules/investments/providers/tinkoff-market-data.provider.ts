@@ -320,31 +320,51 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
     }
 
     try {
-      const instruments = await this.searchAssets(ticker);
-      const match = instruments.find(inst => inst.symbol.toUpperCase() === ticker.toUpperCase());
-      
-      if (!match) {
-        return null;
-      }
-
-      // Get FIGI by searching again
+      // First try to find by ticker directly
       const figiResponse = await this.findInstrumentByTicker(ticker);
-      if (!figiResponse) {
-        return null;
+      if (figiResponse) {
+        // Get full instrument info
+        const instruments = await this.searchAssets(ticker);
+        const match = instruments.find(inst => inst.symbol.toUpperCase() === ticker.toUpperCase());
+        
+        if (match) {
+          const validType: InvestmentAssetType = match.type === 'FUTURES' ? 'OTHER' : match.type;
+          return {
+            figi: figiResponse.figi,
+            ticker: match.symbol,
+            name: match.name,
+            type: validType,
+            currency: match.currency,
+          };
+        }
       }
 
-      // Ensure type is valid InvestmentAssetType (map FUTURES to OTHER)
-      const validType: InvestmentAssetType = match.type === 'FUTURES' ? 'OTHER' : match.type;
+      // If direct search failed, try broader search
+      const instruments = await this.searchAssets(ticker);
+      const match = instruments.find(inst => 
+        inst.symbol.toUpperCase() === ticker.toUpperCase() ||
+        inst.symbol.toUpperCase().startsWith(ticker.toUpperCase())
+      );
+      
+      if (match) {
+        // Try to get FIGI for matched instrument
+        const figiResponse = await this.findInstrumentByTicker(match.symbol);
+        if (figiResponse) {
+          const validType: InvestmentAssetType = match.type === 'FUTURES' ? 'OTHER' : match.type;
+          return {
+            figi: figiResponse.figi,
+            ticker: match.symbol,
+            name: match.name,
+            type: validType,
+            currency: match.currency,
+          };
+        }
+      }
 
-      return {
-        figi: figiResponse.figi,
-        ticker: match.symbol,
-        name: match.name,
-        type: validType,
-        currency: match.currency,
-      };
+      this.logger.warn(`Instrument not found for ticker: ${ticker}`);
+      return null;
     } catch (error) {
-      this.logger.error(`Error getting instrument:`, error);
+      this.logger.error(`Error getting instrument for ${ticker}:`, error);
       return null;
     }
   }

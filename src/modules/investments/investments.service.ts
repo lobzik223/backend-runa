@@ -459,23 +459,29 @@ export class InvestmentsService {
       if (typeof provider.getInstrumentByTicker === 'function') {
         const instrument = await provider.getInstrumentByTicker(ticker);
         if (!instrument) {
-          throw new NotFoundException(`Instrument not found for ticker: ${ticker}`);
+          this.logger.warn(`Instrument not found for ticker: ${ticker}, returning empty candles`);
+          return [];
         }
 
         // Check if provider supports getCandles
         if (typeof provider.getCandles === 'function') {
-          const candles = await provider.getCandles(instrument.figi, from, to, interval);
-          if (!candles || candles.length === 0) {
-            this.logger.warn(`No candles data for ${ticker} from ${from.toISOString()} to ${to.toISOString()}`);
+          try {
+            const candles = await provider.getCandles(instrument.figi, from, to, interval);
+            if (!candles || candles.length === 0) {
+              this.logger.warn(`No candles data for ${ticker} from ${from.toISOString()} to ${to.toISOString()}`);
+              return [];
+            }
+            return candles;
+          } catch (candleError: any) {
+            this.logger.warn(`Error getting candles for ${ticker}: ${candleError?.message || 'Unknown error'}`);
             return [];
           }
-          return candles;
         }
       }
 
       // If we get here, provider doesn't support candles
       this.logger.warn(`Candles not available for ${ticker}: provider doesn't support getCandles method`);
-      throw new BadRequestException('Candles not available. Tinkoff provider required.');
+      return [];
     } catch (error: any) {
       if (error instanceof NotFoundException || error instanceof BadRequestException) {
         throw error;
