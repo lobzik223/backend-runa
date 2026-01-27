@@ -505,4 +505,103 @@ export class InvestmentsService {
       timestamp: new Date().toISOString(),
     };
   }
+
+  /**
+   * Get popular/trending assets with current prices
+   */
+  async getPopularAssets(userId: number, category: 'popular' | 'falling' | 'rising' | 'dividend') {
+    // Popular Russian stocks tickers
+    const popularTickers = ['SBER', 'GAZP', 'LKOH', 'GMKN', 'NVTK', 'YNDX', 'ROSN', 'TATN', 'SNGS', 'SNGSP'];
+    const fallingTickers = ['HYDR', 'CHMF', 'PLZL', 'ALRS', 'MAGN'];
+    const risingTickers = ['SBERP', 'VTBR', 'AFKS', 'RTKM', 'MOEX'];
+    const dividendTickers = ['SBER', 'GAZP', 'LKOH', 'GMKN', 'NVTK'];
+
+    let tickers: string[] = [];
+    switch (category) {
+      case 'falling':
+        tickers = fallingTickers;
+        break;
+      case 'rising':
+        tickers = risingTickers;
+        break;
+      case 'dividend':
+        tickers = dividendTickers;
+        break;
+      default:
+        tickers = popularTickers;
+    }
+
+    const results = [];
+    const pricesMap = await this.marketDataProvider.getCurrentPricesBatch(
+      tickers.map((t) => ({ symbol: t, exchange: 'MOEX' })),
+    );
+
+    // Get yesterday's prices for comparison (using candles from yesterday)
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const today = new Date();
+
+    for (const ticker of tickers) {
+      const currentPrice = pricesMap.get(ticker.toUpperCase());
+      if (currentPrice === undefined || currentPrice === null) continue;
+
+      // Search for asset info
+      const searchResults = await this.marketDataProvider.searchAssets(ticker, 'STOCK');
+      const assetInfo = searchResults.find((a) => a.symbol.toUpperCase() === ticker.toUpperCase());
+
+      if (!assetInfo) continue;
+
+      // Try to get yesterday's price from candles
+      let prevPrice = currentPrice * 0.98; // Fallback
+      try {
+        const tinkoffProvider = this.marketDataProvider as any;
+        if (tinkoffProvider.getInstrumentByTicker && tinkoffProvider.getCandles) {
+          const instrument = await tinkoffProvider.getInstrumentByTicker(ticker);
+          if (instrument) {
+            const candles = await tinkoffProvider.getCandles(
+              instrument.figi,
+              yesterday,
+              today,
+              'DAY',
+            );
+            if (candles && candles.length > 0) {
+              const lastCandle = candles[candles.length - 1];
+              if (lastCandle && lastCandle.close) {
+                prevPrice = lastCandle.close;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.debug(`Could not get historical price for ${ticker}, using fallback`);
+      }
+
+      const change = currentPrice - prevPrice;
+      const changePercent = prevPrice > 0 ? (change / prevPrice) * 100 : 0;
+
+      // Use Tinkoff logo CDN or fallback to Clearbit
+      const logoUrl = `https://invest-brands.cdn-tinkoff.ru/${ticker.toLowerCase()}x160.png`;
+
+      results.push({
+        ticker: assetInfo.symbol,
+        name: assetInfo.name,
+        price: currentPrice,
+        change,
+        changePercent,
+        currency: assetInfo.currency,
+        exchange: assetInfo.exchange,
+        type: assetInfo.type,
+        logo: logoUrl,
+      });
+    }
+
+    // Sort by change percent based on category
+    if (category === 'falling') {
+      results.sort((a, b) => a.changePercent - b.changePercent);
+    } else if (category === 'rising') {
+      results.sort((a, b) => b.changePercent - a.changePercent);
+    }
+
+    return results;
+  }
 }

@@ -123,4 +123,16 @@ export class InvestmentsController {
   getQuote(@CurrentUser() user: JwtAccessPayload, @Param('ticker') ticker: string) {
     return this.investmentsService.getQuote(user.sub, ticker);
   }
+
+  /**
+   * Get popular/trending assets with current prices
+   * GET /api/investments/popular?category=popular|falling|rising|dividend
+   */
+  @Get('popular')
+  getPopularAssets(
+    @CurrentUser() user: JwtAccessPayload,
+    @Query('category') category?: 'popular' | 'falling' | 'rising' | 'dividend',
+  ) {
+    return this.investmentsService.getPopularAssets(user.sub, category || 'popular');
+  }
 }
