@@ -45,7 +45,8 @@ COPY package*.json ./
 COPY prisma ./prisma/
 
 # Установка production зависимостей
-RUN npm ci --only=production && \
+# Используем npm install вместо npm ci для гибкости при обновлении зависимостей
+RUN npm install --omit=dev && \
     npm cache clean --force
 
 # Установка Prisma CLI глобально для миграций

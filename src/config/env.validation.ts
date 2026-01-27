@@ -22,10 +22,7 @@ const envSchema = z
 
   // Timeweb Cloud AI (for AI chat)
   TIMEWEB_AI_ACCESS_ID: z.string().min(1).optional(),
-  TIMEWEB_AI_API_URL: z.string().optional().refine(
-    (val) => !val || val === '' || /^https?:\/\/.+/.test(val),
-    { message: 'Invalid URL format' }
-  ),
+  TIMEWEB_AI_API_URL: z.string().optional(),
   // Legacy OpenAI support (optional)
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_MODEL: z.string().default('gpt-5-nano'),
