@@ -451,14 +451,6 @@ export class InvestmentsService {
     to: Date,
     interval: '1_MIN' | '5_MIN' | '15_MIN' | 'HOUR' | 'DAY' = 'DAY',
   ) {
-    // Verify user has this asset (optional check)
-    const asset = await this.prisma.investmentAsset.findFirst({
-      where: {
-        userId,
-        symbol: ticker.toUpperCase(),
-      },
-    });
-
     // Get instrument info from market data provider
     const tinkoffProvider = this.marketDataProvider as any;
     if (tinkoffProvider.getInstrumentByTicker) {
@@ -479,29 +471,34 @@ export class InvestmentsService {
    * Get current quote for an asset
    */
   async getQuote(userId: number, ticker: string) {
-    // Verify user has this asset
-    const asset = await this.prisma.investmentAsset.findFirst({
-      where: {
-        userId,
-        symbol: ticker.toUpperCase(),
-      },
-    });
-
-    if (!asset) {
-      throw new NotFoundException(`Asset not found for ticker: ${ticker}`);
-    }
-
-    const price = await this.marketDataProvider.getCurrentPrice(asset.symbol, asset.exchange);
+    // Allow quotes for any ticker (not only user's assets)
+    const price = await this.marketDataProvider.getCurrentPrice(ticker, null);
     if (price === null) {
       throw new NotFoundException(`Price not available for ${ticker}`);
     }
 
+    // Try to get asset info from provider
+    let name = ticker;
+    let currency = 'RUB';
+    let exchange: string | null = null;
+    try {
+      const searchResults = await this.marketDataProvider.searchAssets(ticker, 'STOCK');
+      const assetInfo = searchResults.find((a) => a.symbol.toUpperCase() === ticker.toUpperCase());
+      if (assetInfo) {
+        name = assetInfo.name || ticker;
+        currency = assetInfo.currency || 'RUB';
+        exchange = assetInfo.exchange || null;
+      }
+    } catch {
+      // ignore
+    }
+
     return {
-      ticker: asset.symbol,
-      name: asset.name,
+      ticker: ticker.toUpperCase(),
+      name,
       price,
-      currency: asset.currency,
-      exchange: asset.exchange,
+      currency,
+      exchange,
       timestamp: new Date().toISOString(),
     };
   }
