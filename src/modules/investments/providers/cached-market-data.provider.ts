@@ -111,6 +111,41 @@ export class CachedMarketDataProvider implements MarketDataProvider {
     return this.provider.searchAssets(query, assetType);
   }
 
+  // Proxy methods for TinkoffMarketDataProvider
+  async getInstrumentByTicker(ticker: string): Promise<{
+    figi: string;
+    ticker: string;
+    name: string;
+    type: any;
+    currency: string;
+  } | null> {
+    const provider = this.provider as any;
+    if (typeof provider.getInstrumentByTicker === 'function') {
+      return provider.getInstrumentByTicker(ticker);
+    }
+    return null;
+  }
+
+  async getCandles(
+    figi: string,
+    from: Date,
+    to: Date,
+    interval: '1_MIN' | '5_MIN' | '15_MIN' | 'HOUR' | 'DAY' = 'DAY',
+  ): Promise<Array<{
+    time: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }>> {
+    const provider = this.provider as any;
+    if (typeof provider.getCandles === 'function') {
+      return provider.getCandles(figi, from, to, interval);
+    }
+    return [];
+  }
+
   private getCacheKey(symbol: string, exchange?: string | null): string {
     const upperSymbol = symbol.toUpperCase();
     const exchangePart = exchange ? `:${exchange.toUpperCase()}` : '';

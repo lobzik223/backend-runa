@@ -451,20 +451,38 @@ export class InvestmentsService {
     to: Date,
     interval: '1_MIN' | '5_MIN' | '15_MIN' | 'HOUR' | 'DAY' = 'DAY',
   ) {
-    // Get instrument info from market data provider
-    const tinkoffProvider = this.marketDataProvider as any;
-    if (tinkoffProvider.getInstrumentByTicker) {
-      const instrument = await tinkoffProvider.getInstrumentByTicker(ticker);
-      if (!instrument) {
-        throw new NotFoundException(`Instrument not found for ticker: ${ticker}`);
+    try {
+      // Get instrument info from market data provider
+      const provider = this.marketDataProvider as any;
+      
+      // Check if provider supports getInstrumentByTicker (TinkoffMarketDataProvider or CachedMarketDataProvider wrapper)
+      if (typeof provider.getInstrumentByTicker === 'function') {
+        const instrument = await provider.getInstrumentByTicker(ticker);
+        if (!instrument) {
+          throw new NotFoundException(`Instrument not found for ticker: ${ticker}`);
+        }
+
+        // Check if provider supports getCandles
+        if (typeof provider.getCandles === 'function') {
+          const candles = await provider.getCandles(instrument.figi, from, to, interval);
+          if (!candles || candles.length === 0) {
+            this.logger.warn(`No candles data for ${ticker} from ${from.toISOString()} to ${to.toISOString()}`);
+            return [];
+          }
+          return candles;
+        }
       }
 
-      if (tinkoffProvider.getCandles) {
-        return await tinkoffProvider.getCandles(instrument.figi, from, to, interval);
+      // If we get here, provider doesn't support candles
+      this.logger.warn(`Candles not available for ${ticker}: provider doesn't support getCandles method`);
+      throw new BadRequestException('Candles not available. Tinkoff provider required.');
+    } catch (error: any) {
+      if (error instanceof NotFoundException || error instanceof BadRequestException) {
+        throw error;
       }
+      this.logger.error(`Error getting candles for ${ticker}:`, error);
+      throw new BadRequestException(`Failed to get candles: ${error?.message || 'Unknown error'}`);
     }
-
-    throw new BadRequestException('Candles not available. Tinkoff provider required.');
   }
 
   /**
@@ -576,7 +594,7 @@ export class InvestmentsService {
       const change = currentPrice - prevPrice;
       const changePercent = prevPrice > 0 ? (change / prevPrice) * 100 : 0;
 
-      // Use Tinkoff logo CDN or fallback to Clearbit
+      // Use Tinkoff logo CDN
       const logoUrl = `https://invest-brands.cdn-tinkoff.ru/${ticker.toLowerCase()}x160.png`;
 
       results.push({
