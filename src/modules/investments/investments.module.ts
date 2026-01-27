@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { MockMarketDataProvider } from './providers/mock-market-data.provider';
 import { CachedMarketDataProvider } from './providers/cached-market-data.provider';
 import { MoexMarketDataProvider } from './providers/moex-market-data.provider';
+import { TinkoffMarketDataProvider } from './providers/tinkoff-market-data.provider';
 
 @Module({
   imports: [PrismaModule],
@@ -13,23 +14,24 @@ import { MoexMarketDataProvider } from './providers/moex-market-data.provider';
     InvestmentsService,
     MockMarketDataProvider,
     MoexMarketDataProvider,
+    TinkoffMarketDataProvider,
     {
       provide: 'MarketDataProvider',
-      useFactory: (moex: MoexMarketDataProvider, mockProvider: MockMarketDataProvider) => {
-        // Prefer MOEX for RF tickers; fallback to mock if MOEX is down.
-        // Cached wrapper expects MarketDataProvider interface.
+      useFactory: (
+        tinkoff: TinkoffMarketDataProvider,
+        moex: MoexMarketDataProvider,
+        mockProvider: MockMarketDataProvider,
+      ) => {
+        // Prefer Tinkoff if token is configured, otherwise fallback to MOEX, then mock
+        const tinkoffToken = process.env.TINKOFF_DEMO_TOKEN || process.env.TINKOFF_TOKEN;
+        if (tinkoffToken) {
+          return new CachedMarketDataProvider(tinkoff);
+        }
+        // Fallback to MOEX for RF tickers; fallback to mock if MOEX is down.
         return new CachedMarketDataProvider(moex);
       },
-      inject: [MoexMarketDataProvider, MockMarketDataProvider],
+      inject: [TinkoffMarketDataProvider, MoexMarketDataProvider, MockMarketDataProvider],
     },
-    // In production, replace with:
-    // {
-    //   provide: 'MarketDataProvider',
-    //   useFactory: (realProvider: YahooFinanceProvider) => {
-    //     return new CachedMarketDataProvider(realProvider);
-    //   },
-    //   inject: [YahooFinanceProvider],
-    // },
   ],
   exports: [InvestmentsService],
 })

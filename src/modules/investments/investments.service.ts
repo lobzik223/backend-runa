@@ -416,4 +416,69 @@ export class InvestmentsService {
       where: { id: assetId },
     });
   }
+
+  /**
+   * Get candles (historical price data) for an asset
+   */
+  async getCandles(
+    userId: number,
+    ticker: string,
+    from: Date,
+    to: Date,
+    interval: '1_MIN' | '5_MIN' | '15_MIN' | 'HOUR' | 'DAY' = 'DAY',
+  ) {
+    // Verify user has this asset (optional check)
+    const asset = await this.prisma.investmentAsset.findFirst({
+      where: {
+        userId,
+        symbol: ticker.toUpperCase(),
+      },
+    });
+
+    // Get instrument info from market data provider
+    const tinkoffProvider = this.marketDataProvider as any;
+    if (tinkoffProvider.getInstrumentByTicker) {
+      const instrument = await tinkoffProvider.getInstrumentByTicker(ticker);
+      if (!instrument) {
+        throw new NotFoundException(`Instrument not found for ticker: ${ticker}`);
+      }
+
+      if (tinkoffProvider.getCandles) {
+        return await tinkoffProvider.getCandles(instrument.figi, from, to, interval);
+      }
+    }
+
+    throw new BadRequestException('Candles not available. Tinkoff provider required.');
+  }
+
+  /**
+   * Get current quote for an asset
+   */
+  async getQuote(userId: number, ticker: string) {
+    // Verify user has this asset
+    const asset = await this.prisma.investmentAsset.findFirst({
+      where: {
+        userId,
+        symbol: ticker.toUpperCase(),
+      },
+    });
+
+    if (!asset) {
+      throw new NotFoundException(`Asset not found for ticker: ${ticker}`);
+    }
+
+    const price = await this.marketDataProvider.getCurrentPrice(asset.symbol, asset.exchange);
+    if (price === null) {
+      throw new NotFoundException(`Price not available for ${ticker}`);
+    }
+
+    return {
+      ticker: asset.symbol,
+      name: asset.name,
+      price,
+      currency: asset.currency,
+      exchange: asset.exchange,
+      timestamp: new Date().toISOString(),
+    };
+  }
 }

@@ -7,10 +7,12 @@ import {
   Param,
   ParseIntPipe,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { InvestmentsService } from './investments.service';
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
+import { GetCandlesDto, CandleInterval } from './dto/get-candles.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessPayload } from '../auth/types/jwt-payload';
@@ -72,5 +74,43 @@ export class InvestmentsController {
   @Get('portfolio')
   getPortfolio(@CurrentUser() user: JwtAccessPayload) {
     return this.investmentsService.getPortfolio(user.sub);
+  }
+
+  /**
+   * Get historical candles (price data) for an asset
+   * GET /api/investments/candles?ticker=SBER&from=2026-01-01&to=2026-01-26&interval=DAY
+   */
+  @Get('candles')
+  getCandles(
+    @CurrentUser() user: JwtAccessPayload,
+    @Query('ticker') ticker: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('interval') interval?: CandleInterval,
+  ) {
+    if (!ticker || !from || !to) {
+      throw new Error('ticker, from, and to are required');
+    }
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    const intervalValue = interval || CandleInterval.DAY;
+
+    return this.investmentsService.getCandles(
+      user.sub,
+      ticker,
+      fromDate,
+      toDate,
+      intervalValue,
+    );
+  }
+
+  /**
+   * Get current quote for an asset
+   * GET /api/investments/quotes/:ticker
+   */
+  @Get('quotes/:ticker')
+  getQuote(@CurrentUser() user: JwtAccessPayload, @Param('ticker') ticker: string) {
+    return this.investmentsService.getQuote(user.sub, ticker);
   }
 }

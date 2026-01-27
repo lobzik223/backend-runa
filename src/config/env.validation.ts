@@ -31,6 +31,10 @@ const envSchema = z
   // If set, every request (except /api/health) must include header: X-Runa-App-Key
   APP_KEY: z.string().min(8).optional(),
 
+  // Tinkoff InvestAPI
+  TINKOFF_TOKEN: z.string().min(1).optional(),
+  TINKOFF_DEMO_TOKEN: z.string().min(1).optional(),
+
   })
   .superRefine((v, ctx) => {
     // В проде всегда требуем APP_KEY, чтобы API не был открыт “наружу”.
