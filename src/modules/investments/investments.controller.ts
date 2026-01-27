@@ -13,6 +13,7 @@ import { InvestmentsService } from './investments.service';
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
 import { GetCandlesDto, CandleInterval } from './dto/get-candles.dto';
+import { SearchAssetsDto } from './dto/search-assets.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessPayload } from '../auth/types/jwt-payload';
@@ -38,6 +39,15 @@ export class InvestmentsController {
   @Get('assets')
   listAssets(@CurrentUser() user: JwtAccessPayload) {
     return this.investmentsService.listAssets(user.sub);
+  }
+
+  /**
+   * Search assets via market data provider (Tinkoff, MOEX, etc.)
+   * GET /api/investments/search?query=sber&type=STOCK
+   */
+  @Get('search')
+  searchAssets(@CurrentUser() user: JwtAccessPayload, @Query() dto: SearchAssetsDto) {
+    return this.investmentsService.searchAssets(user.sub, dto.query, dto.assetType);
   }
 
   /**

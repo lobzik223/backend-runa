@@ -7,11 +7,12 @@ import {
   Inject,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { MarketDataProvider } from './interfaces/market-data-provider.interface';
+import { MarketDataProvider, type AssetSearchResult } from './interfaces/market-data-provider.interface';
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
 import { PortfolioResponseDto, AssetPortfolioMetrics } from './dto/portfolio-response.dto';
 import { InvestmentAssetType } from '@prisma/client';
+import { SearchAssetType } from './dto/search-assets.dto';
 
 @Injectable()
 export class InvestmentsService {
@@ -346,6 +347,29 @@ export class InvestmentsService {
       pnlValue,
       pnlPercent,
     };
+  }
+
+  /**
+   * Search assets via market data provider (used by frontend search UI)
+   */
+  async searchAssets(userId: number, query: string, assetType?: SearchAssetType) {
+    const trimmed = query?.trim() ?? '';
+    if (!trimmed) {
+      throw new BadRequestException('Query is required');
+    }
+
+    const results = await this.marketDataProvider.searchAssets(trimmed, assetType ?? null);
+    const uniqueMap = new Map<string, AssetSearchResult>();
+
+    for (const item of results) {
+      const key = item.symbol?.toUpperCase() || item.name.toLowerCase();
+      if (!key) continue;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, item);
+      }
+    }
+
+    return Array.from(uniqueMap.values()).slice(0, 40);
   }
 
   /**
