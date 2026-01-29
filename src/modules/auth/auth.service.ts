@@ -421,7 +421,17 @@ export class AuthService {
   async me(userId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, name: true, createdAt: true, trialUntil: true, premiumUntil: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        trialUntil: true,
+        premiumUntil: true,
+        subscription: {
+          select: { status: true, store: true, currentPeriodEnd: true },
+        },
+      },
     });
     if (!user) throw new UnauthorizedException('Пользователь не найден');
 
@@ -435,6 +445,14 @@ export class AuthService {
         createdAt: user.createdAt,
         trialUntil: user.trialUntil,
         premiumUntil: user.premiumUntil,
+        subscription:
+          user.subscription == null
+            ? null
+            : {
+                status: user.subscription.status,
+                store: user.subscription.store,
+                currentPeriodEnd: user.subscription.currentPeriodEnd,
+              },
       },
       referralCode,
     };
