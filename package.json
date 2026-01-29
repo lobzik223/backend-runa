@@ -14,7 +14,9 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "worker": "ts-node -r tsconfig-paths/register src/jobs/worker.ts"
+    "worker": "ts-node -r tsconfig-paths/register src/jobs/worker.ts",
+    "subscription:grant": "node scripts/subscription-admin.js grant",
+    "subscription:revoke": "node scripts/subscription-admin.js revoke"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

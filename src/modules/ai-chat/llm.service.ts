@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AIStructuredOutput } from './ai-rules-engine.service';
+import type { WebSearchResult } from './web-search.service';
 
 /**
  * LLM service for natural language generation.
@@ -38,16 +39,18 @@ export class LLMService {
   }
 
   /**
-   * Convert structured outputs to natural language
+   * Convert structured outputs to natural language.
+   * webSearchResults — актуальные данные из поиска; модель должна опираться только на них (не на примеры и не на старые знания).
    */
   async generateResponse(
     userMessage: string,
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
+    webSearchResults: WebSearchResult[] = [],
   ): Promise<LLMResponse> {
     const useGrok = !!this.grokApiKey;
     const useOpenAI = !!this.openaiApiKey;
-    this.logger.log(`[LLM] useGrok=${useGrok}, useOpenAI=${useOpenAI}`);
+    this.logger.log(`[LLM] useGrok=${useGrok}, useOpenAI=${useOpenAI}, searchResults=${webSearchResults.length}`);
 
     if (!useGrok && !useOpenAI) {
       this.logger.warn('[LLM] No AI provider configured, using stub mode');
@@ -57,11 +60,11 @@ export class LLMService {
     try {
       if (useGrok) {
         this.logger.log('[LLM] Using Grok (xAI)');
-        return await this.callGrok(userMessage, structuredOutputs, financeContext);
+        return await this.callGrok(userMessage, structuredOutputs, financeContext, webSearchResults);
       }
       if (useOpenAI) {
         this.logger.log('[LLM] Using OpenAI');
-        return await this.callOpenAI(userMessage, structuredOutputs, financeContext);
+        return await this.callOpenAI(userMessage, structuredOutputs, financeContext, webSearchResults);
       }
       return this.generateStubResponse(structuredOutputs);
     } catch (error) {
@@ -72,7 +75,11 @@ export class LLMService {
     }
   }
 
-  private buildSystemPrompt(structuredOutputs: AIStructuredOutput[], financeContext: any): string {
+  private buildSystemPrompt(
+    structuredOutputs: AIStructuredOutput[],
+    financeContext: any,
+    webSearchResults: WebSearchResult[] = [],
+  ): string {
     const recentTransactionsText = financeContext.recentTransactions
       .slice(0, 15)
       .map((t: any) => {
@@ -83,8 +90,18 @@ export class LLMService {
       })
       .join('\n');
 
+    const searchBlock =
+      webSearchResults.length > 0
+        ? `
+🌐 АКТУАЛЬНЫЕ ДАННЫЕ ИЗ ПОИСКА В ИНТЕРНЕТЕ (используй ТОЛЬКО их для фактов, дат, курсов, цифр, событий — никогда не используй свои старые знания и не придумывай примеры):
+${webSearchResults.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}`).join('\n\n')}
+
+Для любых фактуальных вопросов (курсы, даты, цифры, события) опирайся ТОЛЬКО на этот блок и на данные пользователя ниже. Если в поиске нет ответа — честно скажи, что актуальных данных нет, и порекомендуй источник (например cbr.ru, ЦБ РФ).`
+        : '';
+
     return `
 Вы — Runa AI, интеллектуальный финансовый помощник в приложении RUNA Finance. Сегодняшняя дата: ${new Date().toLocaleDateString('ru-RU')}, 2026 год.
+${searchBlock}
 
 ВАШИ ВОЗМОЖНОСТИ:
 - Общаться с пользователем на русском: отвечать на вопросы, уточнять, поддерживать диалог
@@ -152,6 +169,14 @@ ${financeContext.creditAccounts.length > 0
 - Активов: ${financeContext.portfolio.assetCount}
 - Общая стоимость: ${financeContext.portfolio.totalCost.toLocaleString('ru-RU')} ₽
 
+💱 АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ (обязательно используй ТОЛЬКО эти цифры для вопросов о валюте):
+${financeContext.exchangeRates
+  ? `- Дата курсов: ${financeContext.exchangeRates.date}
+- 1 USD = ${financeContext.exchangeRates.usd.toLocaleString('ru-RU')} ₽
+- 1 EUR = ${financeContext.exchangeRates.eur.toLocaleString('ru-RU')} ₽
+Для любых вопросов про курс рубля к доллару или евро отвечай ТОЛЬКО этими значениями и всегда указывай дату (${financeContext.exchangeRates.date}). Не используй свои старые знания о курсах.`
+  : 'Данные о курсах сейчас недоступны. Если пользователь спросит про курс валют — честно скажи, что у тебя нет актуальных курсов в этом запросе, и порекомендуй проверить на cbr.ru или в приложении.'}
+
 🔍 АНАЛИТИКА И РЕКОМЕНДАЦИИ ОТ СИСТЕМЫ:
 ${structuredOutputs.length > 0
   ? structuredOutputs.map((o: any) => `- ${o.payload.title}: ${o.payload.description}${o.payload.suggestions ? '\n  Рекомендации: ' + o.payload.suggestions.join(', ') : ''}`).join('\n')
@@ -163,6 +188,8 @@ ${structuredOutputs.length > 0
 - Будьте конкретны: называйте суммы, категории, даты
 - Предлагайте действия, которые пользователь может выполнить прямо сейчас
 - ПИШИТЕ БЕЗ ИСПОЛЬЗОВАНИЯ ** (ДВОЙНЫХ ЗВЕЗДОЧЕК).
+- КУРСЫ ВАЛЮТ: на вопросы про курс рубля к доллару/евро отвечай ТОЛЬКО цифрами из блока «АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ» выше; всегда указывай дату курса; никогда не подставляй курсы из своей обучающей выборки (иначе будут старые данные).
+- ФАКТЫ И ДАТЫ: для любых фактов, цифр, дат, событий используй ТОЛЬКО данные из блока «АКТУАЛЬНЫЕ ДАННЫЕ ИЗ ПОИСКА» (если он есть) и из данных пользователя; не давай примеры из головы и не используй старые знания из обучающей выборки.
 `.trim();
   }
 
@@ -170,12 +197,13 @@ ${structuredOutputs.length > 0
     userMessage: string,
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
+    webSearchResults: WebSearchResult[] = [],
   ): Promise<LLMResponse> {
     if (!this.grokApiKey) {
       throw new Error('Grok не настроен: задайте GROK_API_KEY или XAI_API_KEY в .env');
     }
 
-    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext);
+    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults);
 
     const requestBody = {
       model: this.grokModel,
@@ -235,33 +263,9 @@ ${structuredOutputs.length > 0
     userMessage: string,
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
+    webSearchResults: WebSearchResult[] = [],
   ): Promise<LLMResponse> {
-    const systemPrompt = `
-Вы — Runa AI, интеллектуальный финансовый помощник в приложении RUNA.
-Ваша задача: лаконично анализировать финансы пользователя в контексте РФ (рубли, категории трат, цели).
-
-ПОВЕДЕНИЕ:
-- При начале сложного анализа обязательно пишите: "Анализирую ваши доходы и расходы..." или "Провожу анализ ваших затрат...".
-- Отвечайте максимально просто и коротко. Экономьте токены.
-- Только финансовая аналитика и планирование. Никаких общих тем.
-- Вы не даете юридических советов, но можете мягко рекомендовать инструменты дохода или накопления.
-- Используйте данные пользователя для точных расчетов.
-
-ДАННЫЕ ПОЛЬЗОВАТЕЛЯ (Context):
-- Месяц: Доходы ${financeContext.currentMonth.income} ₽, Расходы ${financeContext.currentMonth.expense} ₽, Остаток ${financeContext.currentMonth.net} ₽.
-- Топ расходов: ${financeContext.topExpenseCategories.map((c: any) => `${c.category} (${c.amount} ₽)`).join(', ')}.
-- Цели: ${financeContext.goals.map((g: any) => `${g.name} (${Math.round(g.progressPercent)}%)`).join(', ') || 'Нет активных целей'}.
-- Кредиты: ${financeContext.creditAccounts.map((ca: any) => `${ca.name} (долг ${ca.currentDebt} ₽)`).join(', ') || 'Нет долгов'}.
-
-ИНСАЙТЫ ОТ СИСТЕМЫ ПРАВИЛ:
-${structuredOutputs.map(o => `- ${o.payload.title}: ${o.payload.description}`).join('\n')}
-
-ИНСТРУКЦИЯ ПО ФОРМАТУ:
-Если пользователь спрашивает про график/диаграмму расходов, обязательно добавьте в ответ:
-[CHART_REQUEST: { "type": "DONUT", "title": "Анализ бюджета" }]
-
-Отвечайте на русском языке.
-`.trim();
+    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

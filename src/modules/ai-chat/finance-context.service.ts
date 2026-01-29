@@ -59,6 +59,13 @@ export interface FinanceContext {
 
   // Savings rate (if calculable)
   savingsRate?: number | null;
+
+  // Актуальные курсы ЦБ РФ (для ответов о рубле/долларе/евро)
+  exchangeRates?: {
+    usd: number;
+    eur: number;
+    date: string;
+  } | null;
 }
 
 @Injectable()
@@ -169,6 +176,31 @@ export class FinanceContextService {
     // Calculate savings rate
     const savingsRate = income > 0 ? ((income - expense) / income) * 100 : null;
 
+    // Актуальные курсы ЦБ РФ (для нейросети — чтобы не подставляла старые данные)
+    let exchangeRates: { usd: number; eur: number; date: string } | null = null;
+    try {
+      const cbrRes = await fetch('https://www.cbr-xml-daily.ru/daily_json.js', {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (cbrRes.ok) {
+        const cbr = (await cbrRes.json()) as {
+          Date?: string;
+          Valute?: { USD?: { Value?: number }; EUR?: { Value?: number } };
+        };
+        const usd = cbr?.Valute?.USD?.Value;
+        const eur = cbr?.Valute?.EUR?.Value;
+        if (typeof usd === 'number' && typeof eur === 'number') {
+          exchangeRates = {
+            usd,
+            eur,
+            date: cbr?.Date || new Date().toISOString().slice(0, 10),
+          };
+        }
+      }
+    } catch {
+      // Игнорируем ошибку — без курсов нейросеть просто скажет проверить источник
+    }
+
     return {
       currentMonth: {
         income,
@@ -207,6 +239,7 @@ export class FinanceContextService {
         assetCount: portfolioAssetCount,
       },
       savingsRate,
+      exchangeRates,
     };
   }
 }

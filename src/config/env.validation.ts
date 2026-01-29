@@ -35,6 +35,9 @@ const envSchema = z
   TINKOFF_TOKEN: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
   TINKOFF_DEMO_TOKEN: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
 
+  // Serper — поиск в интернете для актуальных данных в AI-чате (курсы, даты, факты)
+  SERPER_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+
   })
   .superRefine((v, ctx) => {
     // В проде всегда требуем APP_KEY, чтобы API не был открыт “наружу”.

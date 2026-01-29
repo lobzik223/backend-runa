@@ -9,6 +9,7 @@ import { FinanceContextService, FinanceContext } from './finance-context.service
 import { AIRulesEngineService, AIStructuredOutput } from './ai-rules-engine.service';
 import { LLMService } from './llm.service';
 import { ChartDataService } from './chart-data.service';
+import { WebSearchService } from './web-search.service';
 import dayjs from 'dayjs';
 
 export interface ChatMessage {
@@ -42,6 +43,7 @@ export class AIChatService {
     private rulesEngine: AIRulesEngineService,
     private llmService: LLMService,
     private chartDataService: ChartDataService,
+    private webSearchService: WebSearchService,
   ) {}
 
   async sendMessage(
@@ -122,11 +124,15 @@ export class AIChatService {
       });
     }
 
+    // Поиск актуальных данных по запросу пользователя (курсы, даты, факты)
+    const webSearchResults = await this.webSearchService.search(userMessage);
+
     // Generate LLM response
     const llmResponse = await this.llmService.generateResponse(
       userMessage,
       structuredOutputs,
       financeContext,
+      webSearchResults,
     );
 
     // Save assistant message

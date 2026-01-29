@@ -67,6 +67,38 @@ curl -X POST http://localhost:3000/api/health/maintenance -H "Content-Type: appl
 curl -X POST http://localhost:3000/api/health/maintenance -H "Content-Type: application/json" -d '{"enabled":false}' -H "X-Runa-App-Key: YOUR_APP_KEY"
 ```
 
+## Premium подписка (выдать / снять с аккаунта)
+
+Скрипт на сервере (из папки `backend-runa` или внутри контейнера):
+
+**Выдать Premium** (по email или по id пользователя, по умолчанию на 365 дней):
+```bash
+node scripts/subscription-admin.js grant <email или userId> [дней]
+# примеры:
+node scripts/subscription-admin.js grant user@example.com 365
+node scripts/subscription-admin.js grant 5 30
+```
+
+**Снять Premium**:
+```bash
+node scripts/subscription-admin.js revoke <email или userId>
+# примеры:
+node scripts/subscription-admin.js revoke user@example.com
+node scripts/subscription-admin.js revoke 5
+```
+
+В Docker (prod):
+```bash
+docker compose -f docker-compose.prod.yml exec backend node scripts/subscription-admin.js grant user@example.com 365
+docker compose -f docker-compose.prod.yml exec backend node scripts/subscription-admin.js revoke user@example.com
+```
+
+Локально (из папки backend-runa, с настроенным `.env` и БД):
+```bash
+npm run subscription:grant -- user@example.com 365
+npm run subscription:revoke -- user@example.com
+```
+
 ## Endpoints (MVP)
 
 - `GET /health`
