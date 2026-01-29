@@ -20,21 +20,20 @@ const envSchema = z
 
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
 
-  // Grok (xAI) для RUNA AI чата — один API ключ (или XAI_API_KEY)
-  GROK_API_KEY: z.string().min(1).optional(),
-  XAI_API_KEY: z.string().min(1).optional(),
+  // Grok (xAI) для RUNA AI чата — пустая строка в Docker = «не задано»
+  GROK_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  XAI_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
   GROK_MODEL: z.string().default('grok-4-1-fast-reasoning'),
-  // OpenAI (опционально, запасной вариант)
-  OPENAI_API_KEY: z.string().min(1).optional(),
+  // OpenAI (опционально)
+  OPENAI_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
   OPENAI_MODEL: z.string().default('gpt-5-nano'),
 
   // Optional application key to protect API from random access.
-  // If set, every request (except /api/health) must include header: X-Runa-App-Key
-  APP_KEY: z.string().min(8).optional(),
+  APP_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(8).optional()),
 
   // Tinkoff InvestAPI
-  TINKOFF_TOKEN: z.string().min(1).optional(),
-  TINKOFF_DEMO_TOKEN: z.string().min(1).optional(),
+  TINKOFF_TOKEN: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  TINKOFF_DEMO_TOKEN: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
 
   })
   .superRefine((v, ctx) => {
