@@ -32,7 +32,8 @@ export interface ChatResponse {
 @Injectable()
 export class AIChatService {
   private readonly logger = new Logger(AIChatService.name);
-  private readonly FREE_TIER_MESSAGE_LIMIT = 10; // per day
+  private readonly FREE_TIER_MESSAGE_LIMIT = 12; // 12 обращений в день для Free
+  private readonly FREE_TIER_TOKEN_LIMIT = 20000; // 20.000 токенов общий лимит для Free
   private readonly PREMIUM_TIER_MESSAGE_LIMIT = 1000; // effectively unlimited
 
   constructor(
@@ -48,6 +49,9 @@ export class AIChatService {
     userMessage: string,
     threadId?: string,
   ): Promise<ChatResponse> {
+    // 1. Очистка старых сообщений перед обработкой нового
+    await this.cleanupOldMessages(userId);
+
     // Validate message safety
     const safetyCheck = this.llmService.validateUserMessage(userMessage);
     if (!safetyCheck.safe) {
@@ -148,6 +152,41 @@ export class AIChatService {
   }
 
   /**
+   * Очистка старых сообщений в зависимости от статуса подписки
+   */
+  private async cleanupOldMessages(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { subscription: true },
+    });
+
+    if (!user) return;
+
+    const isPremium = user.subscription?.status === 'ACTIVE';
+    const now = new Date();
+
+    if (isPremium) {
+      // Для Premium: храним 7 дней
+      const sevenDaysAgo = dayjs(now).subtract(7, 'day').toDate();
+      await this.prisma.aiMessage.deleteMany({
+        where: {
+          userId,
+          createdAt: { lt: sevenDaysAgo },
+        },
+      });
+    } else {
+      // Для Free: храним 10 часов
+      const tenHoursAgo = dayjs(now).subtract(10, 'hour').toDate();
+      await this.prisma.aiMessage.deleteMany({
+        where: {
+          userId,
+          createdAt: { lt: tenHoursAgo },
+        },
+      });
+    }
+  }
+
+  /**
    * Detect if user is requesting charts
    */
   private detectChartRequest(message: string): boolean {
@@ -203,9 +242,14 @@ export class AIChatService {
     }
 
     const isPremium = user.subscription?.status === 'ACTIVE';
-    const limit = isPremium ? this.PREMIUM_TIER_MESSAGE_LIMIT : this.FREE_TIER_MESSAGE_LIMIT;
+    
+    // Premium пользователи не имеют жестких лимитов здесь (или они очень высокие)
+    if (isPremium) return;
 
-    // Count messages today
+    // Лимиты для Free пользователей
+    const limit = this.FREE_TIER_MESSAGE_LIMIT;
+
+    // 1. Проверка количества сообщений за сегодня
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -221,7 +265,23 @@ export class AIChatService {
 
     if (messageCount >= limit) {
       throw new BadRequestException(
-        `Достигнут лимит сообщений (${limit} в день). ${isPremium ? '' : 'Перейдите на Premium для увеличения лимита.'}`,
+        `У вас закончился дневной лимит (12 обращений). Воспользуйтесь премиум подпиской для неограниченного общения.`,
+      );
+    }
+
+    // 2. Проверка общего лимита токенов (tokensIn + tokensOut)
+    const totalTokens = await this.prisma.aiMessage.aggregate({
+      where: { userId },
+      _sum: {
+        tokensIn: true,
+        tokensOut: true,
+      },
+    });
+
+    const usedTokens = (totalTokens._sum.tokensIn || 0) + (totalTokens._sum.tokensOut || 0);
+    if (usedTokens >= this.FREE_TIER_TOKEN_LIMIT) {
+      throw new BadRequestException(
+        `У вас закончился общий лимит токенов (20,000). Воспользуйтесь премиум подпиской для продолжения.`,
       );
     }
   }
