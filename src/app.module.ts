@@ -14,6 +14,7 @@ import { InvestmentsModule } from './modules/investments/investments.module';
 import { MarketNewsModule } from './modules/market-news/market-news.module';
 import { AIChatModule } from './modules/ai-chat/ai-chat.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
+import { PaymentsModule } from './modules/payments/payments.module';
 import { GoalsModule } from './modules/goals/goals.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { env } from './config/env.validation';
@@ -42,6 +43,7 @@ import { env } from './config/env.validation';
     MarketNewsModule,
     AIChatModule,
     SubscriptionsModule,
+    PaymentsModule,
     GoalsModule,
   ],
 })
