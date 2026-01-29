@@ -25,9 +25,18 @@ async function bootstrap() {
   // This is NOT a replacement for HTTPS/JWT, but blocks random scanners.
   if (env.APP_KEY) {
     app.use((req: any, res: any, next: any) => {
-      const path = req?.originalUrl || req?.url || '';
-      // keep health open for infrastructure checks
-      if (path.startsWith(`${env.API_PREFIX}/health`)) return next();
+      const reqPath = req?.originalUrl || req?.url || '';
+      const prefix = env.API_PREFIX.replace(/^\//, '');
+      const healthPath = `/${prefix}/health`;
+      // GET /api/health — открыт для проверки доступности
+      if (reqPath === healthPath && req.method === 'GET') return next();
+      // POST /api/health/maintenance — только с APP_KEY (включить/выключить режим «Ведутся работы»)
+      if (reqPath === `${healthPath}/maintenance` && req.method === 'POST') {
+        const key = req.headers['x-runa-app-key'];
+        if (key === env.APP_KEY) return next();
+        return res.status(401).json({ statusCode: 401, message: 'Unauthorized' });
+      }
+      if (reqPath.startsWith(healthPath)) return next();
       const key = req.headers['x-runa-app-key'];
       if (key !== env.APP_KEY) {
         return res.status(401).json({ statusCode: 401, message: 'Unauthorized' });

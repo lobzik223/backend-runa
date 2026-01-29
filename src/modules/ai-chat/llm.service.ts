@@ -21,7 +21,7 @@ export class LLMService {
   private readonly logger = new Logger(LLMService.name);
   /** Поддерживаем GROK_API_KEY и XAI_API_KEY (как в curl от xAI) */
   private readonly grokApiKey = process.env.GROK_API_KEY || process.env.XAI_API_KEY;
-  private readonly grokModel = process.env.GROK_MODEL || 'grok-4-fast';
+  private readonly grokModel = process.env.GROK_MODEL || 'grok-4-1-fast-reasoning';
   private readonly openaiApiKey = process.env.OPENAI_API_KEY;
   private readonly openaiModel = process.env.OPENAI_MODEL || 'gpt-5-nano';
 

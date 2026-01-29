@@ -23,7 +23,7 @@ const envSchema = z
   // Grok (xAI) для RUNA AI чата — один API ключ (или XAI_API_KEY)
   GROK_API_KEY: z.string().min(1).optional(),
   XAI_API_KEY: z.string().min(1).optional(),
-  GROK_MODEL: z.string().default('grok-4-fast'),
+  GROK_MODEL: z.string().default('grok-4-1-fast-reasoning'),
   // OpenAI (опционально, запасной вариант)
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_MODEL: z.string().default('gpt-5-nano'),

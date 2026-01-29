@@ -57,6 +57,7 @@ services:
       THROTTLE_TTL_SECONDS: ${THROTTLE_TTL_SECONDS:-60}
       THROTTLE_LIMIT: ${THROTTLE_LIMIT:-30}
       APP_KEY: ${APP_KEY:-runa_dev_app_key_change_me}
+      MAINTENANCE_FLAG_PATH: /app/data/maintenance.flag
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,12 +67,14 @@ services:
       - runa_network
     restart: unless-stopped
     volumes:
-      # Монтируем prisma для миграций (опционально)
       - ./prisma:/app/prisma:ro
+      # Флаг «Ведутся работы» (команды: node scripts/maintenance.js on/off)
+      - runa_data:/app/data
 
 volumes:
   runa_pgdata:
   runa_redisdata:
+  runa_data:
 
 networks:
   runa_network:
