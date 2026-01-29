@@ -65,8 +65,9 @@ export class LLMService {
       }
       return this.generateStubResponse(structuredOutputs);
     } catch (error) {
-      this.logger.error(`[LLM] Error: ${error instanceof Error ? error.message : String(error)}`);
-      this.logger.warn('[LLM] Falling back to stub mode due to error');
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[LLM] Grok/OpenAI error: ${errMsg}`);
+      this.logger.warn('[LLM] Falling back to stub mode. Проверьте GROK_API_KEY на сервере и логи выше.');
       return this.generateStubResponse(structuredOutputs);
     }
   }
