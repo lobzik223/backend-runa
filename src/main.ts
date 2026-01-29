@@ -3,6 +3,8 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import helmet from 'helmet';
+import { join } from 'path';
+import express from 'express';
 import { AppModule } from './app.module';
 import { env } from './config/env.validation';
 
@@ -21,6 +23,9 @@ async function bootstrap() {
     }),
   );
 
+  // Иконки акций (SVG из tinkofficon) — раздаём без авторизации
+  app.use('/assets/icons', express.static(join(process.cwd(), 'tinkofficon')));
+
   // Lightweight app-level protection: allow only our mobile app if APP_KEY is configured.
   // This is NOT a replacement for HTTPS/JWT, but blocks random scanners.
   if (env.APP_KEY) {
@@ -28,6 +33,8 @@ async function bootstrap() {
       const reqPath = req?.originalUrl || req?.url || '';
       const prefix = env.API_PREFIX.replace(/^\//, '');
       const healthPath = `/${prefix}/health`;
+      // Иконки акций (SVG) — открыты для загрузки в приложении
+      if (reqPath.startsWith('/assets/icons')) return next();
       // GET /api/health — открыт для проверки доступности
       if (reqPath === healthPath && req.method === 'GET') return next();
       // POST /api/health/maintenance — только с APP_KEY (включить/выключить режим «Ведутся работы»)

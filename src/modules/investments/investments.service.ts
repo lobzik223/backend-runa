@@ -13,6 +13,7 @@ import { AddLotDto } from './dto/add-lot.dto';
 import { PortfolioResponseDto, AssetPortfolioMetrics } from './dto/portfolio-response.dto';
 import { InvestmentAssetType } from '@prisma/client';
 import { SearchAssetType } from './dto/search-assets.dto';
+import { getAssetLogoUrl } from './constants/tinkoff-icon-map';
 
 @Injectable()
 export class InvestmentsService {
@@ -359,13 +360,13 @@ export class InvestmentsService {
     }
 
     const results = await this.marketDataProvider.searchAssets(trimmed, assetType ?? null);
-    const uniqueMap = new Map<string, AssetSearchResult>();
+    const uniqueMap = new Map<string, AssetSearchResult & { logo?: string }>();
 
     for (const item of results) {
       const key = item.symbol?.toUpperCase() || item.name.toLowerCase();
       if (!key) continue;
       if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, item);
+        uniqueMap.set(key, { ...item, logo: getAssetLogoUrl(item.symbol) });
       }
     }
 
@@ -523,6 +524,7 @@ export class InvestmentsService {
       price,
       currency,
       exchange,
+      logo: getAssetLogoUrl(ticker),
       timestamp: new Date().toISOString(),
     };
   }
@@ -600,9 +602,6 @@ export class InvestmentsService {
       const change = currentPrice - prevPrice;
       const changePercent = prevPrice > 0 ? (change / prevPrice) * 100 : 0;
 
-      // Use Tinkoff logo CDN
-      const logoUrl = `https://invest-brands.cdn-tinkoff.ru/${ticker.toLowerCase()}x160.png`;
-
       results.push({
         ticker: assetInfo.symbol,
         name: assetInfo.name,
@@ -612,7 +611,7 @@ export class InvestmentsService {
         currency: assetInfo.currency,
         exchange: assetInfo.exchange,
         type: assetInfo.type,
-        logo: logoUrl,
+        logo: getAssetLogoUrl(assetInfo.symbol),
       });
     }
 
