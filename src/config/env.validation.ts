@@ -20,10 +20,11 @@ const envSchema = z
 
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
 
-  // Timeweb Cloud AI (for AI chat)
-  TIMEWEB_AI_ACCESS_ID: z.string().min(1).optional(),
-  TIMEWEB_AI_API_URL: z.string().optional(),
-  // Legacy OpenAI support (optional)
+  // Grok (xAI) для RUNA AI чата — один API ключ (или XAI_API_KEY)
+  GROK_API_KEY: z.string().min(1).optional(),
+  XAI_API_KEY: z.string().min(1).optional(),
+  GROK_MODEL: z.string().default('grok-4-fast'),
+  // OpenAI (опционально, запасной вариант)
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_MODEL: z.string().default('gpt-5-nano'),
 

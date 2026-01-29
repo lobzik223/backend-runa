@@ -14,39 +14,27 @@ export interface LLMResponse {
   model?: string;
 }
 
+const GROK_API_URL = 'https://api.x.ai/v1/chat/completions';
+
 @Injectable()
 export class LLMService {
   private readonly logger = new Logger(LLMService.name);
-  // Timeweb Cloud AI configuration
-  private readonly timewebAccessId = process.env.TIMEWEB_AI_ACCESS_ID;
-  private readonly timewebApiKey = process.env.TIMEWEB_AI_API_KEY;
-  private readonly timewebApiUrl = process.env.TIMEWEB_AI_API_URL || 
-    `https://agent.timeweb.cloud/api/v1/cloud-ai/agents/${process.env.TIMEWEB_AI_ACCESS_ID || '009e0398-152a-4a94-84f0-65f32c7aacdc'}/v1`;
-  // Legacy OpenAI support
+  /** Поддерживаем GROK_API_KEY и XAI_API_KEY (как в curl от xAI) */
+  private readonly grokApiKey = process.env.GROK_API_KEY || process.env.XAI_API_KEY;
+  private readonly grokModel = process.env.GROK_MODEL || 'grok-4-fast';
   private readonly openaiApiKey = process.env.OPENAI_API_KEY;
   private readonly openaiModel = process.env.OPENAI_MODEL || 'gpt-5-nano';
-  
+
   constructor() {
-    // Логируем конфигурацию при инициализации
-    this.logger.log(`[LLM Service] Initializing...`);
-    this.logger.log(`[LLM Service] TIMEWEB_AI_ACCESS_ID: ${this.timewebAccessId ? `${this.timewebAccessId.substring(0, 8)}...` : 'NOT SET'}`);
-    this.logger.log(`[LLM Service] TIMEWEB_AI_API_KEY: ${this.timewebApiKey ? 'SET' : 'NOT SET'}`);
-    this.logger.log(`[LLM Service] TIMEWEB_AI_API_URL: ${this.timewebApiUrl || 'NOT SET'}`);
+    this.logger.log(`[LLM Service] Grok API key: ${this.grokApiKey ? 'SET' : 'NOT SET'}, model: ${this.grokModel}`);
     this.logger.log(`[LLM Service] OPENAI_API_KEY: ${this.openaiApiKey ? 'SET' : 'NOT SET'}`);
-    
-    if (this.timewebAccessId) {
-      this.logger.log(`[LLM Service] ✅ Timeweb AI настроен: Access ID = ${this.timewebAccessId.substring(0, 8)}...`);
-      this.logger.log(`[LLM Service] ✅ Timeweb AI URL: ${this.timewebApiUrl}`);
-    } else if (this.timewebApiUrl && this.timewebApiUrl.includes('timeweb')) {
-      this.logger.log(`[LLM Service] ✅ Timeweb AI настроен через URL: ${this.timewebApiUrl}`);
+    if (this.grokApiKey) {
+      this.logger.log(`[LLM Service] ✅ Grok (xAI) настроен — общение, анализ, тактики по финансам`);
+    } else if (this.openaiApiKey) {
+      this.logger.log(`[LLM Service] ✅ OpenAI настроен (fallback)`);
     } else {
-      this.logger.warn(`[LLM Service] ⚠️ Timeweb AI не настроен: отсутствуют TIMEWEB_AI_ACCESS_ID и TIMEWEB_AI_API_URL`);
-      this.logger.warn(`[LLM Service] ⚠️ Будет использован stub режим (автоответчик)`);
+      this.logger.warn(`[LLM Service] ⚠️ AI не настроен: задайте GROK_API_KEY или XAI_API_KEY в .env. Будет использован stub.`);
     }
-  }
-  
-  private get useTimewebAI(): boolean {
-    return !!this.timewebAccessId || !!this.timewebApiUrl;
   }
 
   /**
@@ -57,46 +45,33 @@ export class LLMService {
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
   ): Promise<LLMResponse> {
-    // Check if we have any AI provider configured
-    this.logger.log(`[LLM] Checking AI providers: useTimewebAI=${this.useTimewebAI}, hasOpenAI=${!!this.openaiApiKey}`);
-    
-    if (!this.useTimewebAI && !this.openaiApiKey) {
+    const useGrok = !!this.grokApiKey;
+    const useOpenAI = !!this.openaiApiKey;
+    this.logger.log(`[LLM] useGrok=${useGrok}, useOpenAI=${useOpenAI}`);
+
+    if (!useGrok && !useOpenAI) {
       this.logger.warn('[LLM] No AI provider configured, using stub mode');
-      // Stub mode - return formatted structured outputs
       return this.generateStubResponse(structuredOutputs);
     }
 
-    // Real LLM integration
     try {
-      if (this.useTimewebAI) {
-        this.logger.log('[LLM] Using Timeweb AI');
-        return await this.callTimewebAI(userMessage, structuredOutputs, financeContext);
-      } else if (this.openaiApiKey) {
+      if (useGrok) {
+        this.logger.log('[LLM] Using Grok (xAI)');
+        return await this.callGrok(userMessage, structuredOutputs, financeContext);
+      }
+      if (useOpenAI) {
         this.logger.log('[LLM] Using OpenAI');
         return await this.callOpenAI(userMessage, structuredOutputs, financeContext);
       }
-      this.logger.warn('[LLM] No provider selected, using stub');
       return this.generateStubResponse(structuredOutputs);
     } catch (error) {
       this.logger.error(`[LLM] Error: ${error instanceof Error ? error.message : String(error)}`);
-      this.logger.error(`[LLM] Stack: ${error instanceof Error ? error.stack : 'No stack'}`);
-      // Fallback to stub
       this.logger.warn('[LLM] Falling back to stub mode due to error');
       return this.generateStubResponse(structuredOutputs);
     }
   }
 
-  private async callTimewebAI(
-    userMessage: string,
-    structuredOutputs: AIStructuredOutput[],
-    financeContext: any,
-  ): Promise<LLMResponse> {
-    // Проверяем наличие необходимых переменных
-    if (!this.timewebAccessId && !this.timewebApiUrl) {
-      throw new Error('Timeweb AI не настроен: отсутствуют TIMEWEB_AI_ACCESS_ID или TIMEWEB_AI_API_URL');
-    }
-
-    // Формируем детальный контекст о транзакциях
+  private buildSystemPrompt(structuredOutputs: AIStructuredOutput[], financeContext: any): string {
     const recentTransactionsText = financeContext.recentTransactions
       .slice(0, 15)
       .map((t: any) => {
@@ -107,16 +82,21 @@ export class LLMService {
       })
       .join('\n');
 
-    const systemPrompt = `
+    return `
 Вы — Runa AI, интеллектуальный финансовый помощник в приложении RUNA Finance.
-Ваша задача: анализировать финансы пользователя и давать персональные рекомендации на основе его реальных данных.
+
+ВАШИ ВОЗМОЖНОСТИ:
+- Общаться с пользователем на русском: отвечать на вопросы, уточнять, поддерживать диалог
+- Анализировать состояние в приложении: доходы, расходы, цели, кредиты, портфель — по реальным данным ниже
+- Генерировать тактики по финансам: как копить, куда сократить траты, как достичь целей, как гасить долги
+- Помогать с планированием бюджета, нормой сбережений, предупреждать о рисках и давать конкретные шаги
 
 ПОВЕДЕНИЕ:
-- Отвечайте дружелюбно, но профессионально на русском языке
-- Используйте конкретные цифры из данных пользователя
-- Давайте практические советы по управлению финансами
-- Если видите проблемы (перерасход, долги), мягко указывайте на них
-- Предлагайте конкретные действия для улучшения финансовой ситуации
+- Отвечайте дружелюбно, но по делу, на русском языке
+- Опирайтесь на цифры из данных пользователя — называйте суммы, категории, даты
+- Давайте практические советы и пошаговые тактики
+- При проблемах (перерасход, долги, недостижимые цели) мягко указывайте и предлагайте действия
+- Предлагайте действия, которые пользователь может выполнить прямо сейчас
 
 ДЕТАЛЬНЫЕ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ:
 
@@ -127,8 +107,8 @@ export class LLMService {
 - Норма сбережений: ${financeContext.savingsRate ? financeContext.savingsRate.toFixed(1) : '0'}%
 
 💰 ТОП КАТЕГОРИЙ РАСХОДОВ:
-${financeContext.topExpenseCategories.length > 0 
-  ? financeContext.topExpenseCategories.map((c: any, idx: number) => 
+${financeContext.topExpenseCategories.length > 0
+  ? financeContext.topExpenseCategories.map((c: any, idx: number) =>
       `${idx + 1}. ${c.category}: ${c.amount.toLocaleString('ru-RU')} ₽`
     ).join('\n')
   : 'Нет данных о расходах'}
@@ -177,91 +157,71 @@ ${structuredOutputs.length > 0
 - Будьте конкретны: называйте суммы, категории, даты
 - Предлагайте действия, которые пользователь может выполнить прямо сейчас
 `.trim();
+  }
 
-    try {
-      const apiUrl = `${this.timewebApiUrl}/chat/completions`;
-      this.logger.log(`[Timeweb AI] Calling API: ${apiUrl}`);
-      
-      // Формируем заголовки согласно документации Timeweb AI API
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'x-proxy-source': 'runa-finance', // Обязательный заголовок согласно документации
-      };
-
-      // Согласно документации Timeweb AI API, требуется Authorization: Bearer <token>
-      // Вариант 1: Если есть API Key, используем его как Bearer token
-      if (this.timewebApiKey) {
-        headers['Authorization'] = `Bearer ${this.timewebApiKey}`;
-        this.logger.log(`[Timeweb AI] Using API Key as Bearer token for authorization`);
-      } 
-      // Вариант 2: Если нет API Key, пробуем Access ID как токен (может работать в некоторых случаях)
-      else if (this.timewebAccessId) {
-        headers['Authorization'] = `Bearer ${this.timewebAccessId}`;
-        this.logger.log(`[Timeweb AI] Using Access ID as Bearer token (fallback, may not work)`);
-      } else {
-        this.logger.warn(`[Timeweb AI] No API Key or Access ID for authorization`);
-      }
-      
-      const requestBody = {
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.7,
-        max_tokens: 500,
-      };
-
-      this.logger.log(`[Timeweb AI] Request body: model=${requestBody.model}, messages=${requestBody.messages.length}, prompt_length=${systemPrompt.length}`);
-
-      // Timeweb Cloud AI использует OpenAI-совместимый API
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestBody),
-      });
-
-      this.logger.log(`[Timeweb AI] Response status: ${response.status} ${response.statusText}`);
-
-      if (!response.ok) {
-        const errText = await response.text();
-        let errData;
-        try {
-          errData = JSON.parse(errText);
-        } catch {
-          errData = { message: errText };
-        }
-        this.logger.error(`[Timeweb AI] API error (${response.status}): ${JSON.stringify(errData)}`);
-        
-        // Если ошибка авторизации, возможно нужен правильный API токен
-        if (response.status === 401 || response.status === 403) {
-          this.logger.error(`[Timeweb AI] ❌ Authorization failed. According to Timeweb AI API docs, you need:`);
-          this.logger.error(`[Timeweb AI] 1. Authorization: Bearer <token> header (required)`);
-          this.logger.error(`[Timeweb AI] 2. x-proxy-source header (required)`);
-          this.logger.error(`[Timeweb AI] 3. Get API token from Timeweb Cloud panel: https://timeweb.cloud/my/api-keys`);
-          this.logger.error(`[Timeweb AI] 4. Add it to .env as: TIMEWEB_AI_API_KEY=your_token_here`);
-        }
-        
-        throw new Error(`Timeweb AI API error: ${JSON.stringify(errData)}`);
-      }
-
-      const data: any = await response.json();
-      const text = data.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
-
-      this.logger.log(`[Timeweb AI] Success! Response length: ${text.length}, tokens: ${data.usage?.total_tokens || 0}`);
-
-      return {
-        text,
-        tokensUsed: {
-          input: data.usage?.prompt_tokens || 0,
-          output: data.usage?.completion_tokens || 0,
-        },
-        model: 'timeweb-cloud-ai',
-      };
-    } catch (error) {
-      this.logger.error(`Timeweb AI call failed: ${error instanceof Error ? error.message : String(error)}`);
-      throw error;
+  private async callGrok(
+    userMessage: string,
+    structuredOutputs: AIStructuredOutput[],
+    financeContext: any,
+  ): Promise<LLMResponse> {
+    if (!this.grokApiKey) {
+      throw new Error('Grok не настроен: задайте GROK_API_KEY или XAI_API_KEY в .env');
     }
+
+    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext);
+
+    const requestBody = {
+      model: this.grokModel,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+      temperature: 0.7,
+      max_tokens: 800,
+      stream: false,
+    };
+
+    this.logger.log(`[Grok] Calling ${GROK_API_URL}, model=${this.grokModel}, prompt_length=${systemPrompt.length}`);
+
+    const response = await fetch(GROK_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.grokApiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    this.logger.log(`[Grok] Response status: ${response.status} ${response.statusText}`);
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let errData: any;
+      try {
+        errData = JSON.parse(errText);
+      } catch {
+        errData = { message: errText };
+      }
+      this.logger.error(`[Grok] API error (${response.status}): ${JSON.stringify(errData)}`);
+      if (response.status === 401 || response.status === 403) {
+        this.logger.error(`[Grok] ❌ Неверный API ключ. Получите ключ: https://console.x.ai/team/default/api-keys`);
+      }
+      throw new Error(`Grok API error: ${JSON.stringify(errData)}`);
+    }
+
+    const data: any = await response.json();
+    const text = data.choices?.[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
+
+    this.logger.log(`[Grok] Success! Response length: ${text.length}, tokens: ${data.usage?.total_tokens ?? 0}`);
+
+    return {
+      text,
+      tokensUsed: {
+        input: data.usage?.prompt_tokens ?? 0,
+        output: data.usage?.completion_tokens ?? 0,
+      },
+      model: this.grokModel,
+    };
   }
 
   private async callOpenAI(
@@ -296,44 +256,39 @@ ${structuredOutputs.map(o => `- ${o.payload.title}: ${o.payload.description}`).j
 Отвечайте на русском языке.
 `.trim();
 
-    try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.openaiApiKey}`,
-        },
-        body: JSON.stringify({
-          model: this.openaiModel,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userMessage },
-          ],
-          temperature: 0.7,
-          max_tokens: 300,
-        }),
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(`OpenAI API error: ${JSON.stringify(errData)}`);
-      }
-
-      const data: any = await response.json();
-      const text = data.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
-
-      return {
-        text,
-        tokensUsed: {
-          input: data.usage?.prompt_tokens || 0,
-          output: data.usage?.completion_tokens || 0,
-        },
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.openaiApiKey}`,
+      },
+      body: JSON.stringify({
         model: this.openaiModel,
-      };
-    } catch (error) {
-      this.logger.error(`OpenAI call failed: ${error instanceof Error ? error.message : String(error)}`);
-      throw error;
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+        temperature: 0.7,
+        max_tokens: 300,
+      }),
+    });
+
+    if (!response.ok) {
+      const errData = await response.json();
+      throw new Error(`OpenAI API error: ${JSON.stringify(errData)}`);
     }
+
+    const data: any = await response.json();
+    const text = data.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
+
+    return {
+      text,
+      tokensUsed: {
+        input: data.usage?.prompt_tokens || 0,
+        output: data.usage?.completion_tokens || 0,
+      },
+      model: this.openaiModel,
+    };
   }
 
   private generateStubResponse(structuredOutputs: AIStructuredOutput[]): LLMResponse {
@@ -370,7 +325,6 @@ ${structuredOutputs.map(o => `- ${o.payload.title}: ${o.payload.description}`).j
   validateUserMessage(message: string): { safe: boolean; reason?: string } {
     const lowerMessage = message.toLowerCase();
 
-    // Block direct investment advice requests
     const riskyPatterns = [
       /купи.*акци/i,
       /продай.*акци/i,

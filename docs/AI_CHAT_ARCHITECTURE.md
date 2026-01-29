@@ -65,7 +65,7 @@ Response to User
 
 **Режимы:**
 - **Stub mode** (без API ключа): форматирует структурированные выводы
-- **LLM mode** (с API ключом): использует OpenAI для генерации текста
+- **LLM mode** (с API ключом): Grok (xAI) по умолчанию, запасной вариант — OpenAI
 
 ### 4. AIChatService
 
@@ -147,19 +147,21 @@ AI **дает**:
 - `tokensIn`, `tokensOut` (опционально)
 - `createdAt`
 
-## Integration with OpenAI
+## Integration with Grok (xAI)
 
 Для включения LLM:
 
-1. Установите `OPENAI_API_KEY` в `.env`
-2. Опционально: установите `OPENAI_MODEL` (по умолчанию: `gpt-4o-mini`)
+1. Установите `GROK_API_KEY` в `.env` (ключ получить: https://console.x.ai/team/default/api-keys)
+2. Опционально: `OPENAI_API_KEY` и `OPENAI_MODEL` — запасной провайдер
 
 ```env
+GROK_API_KEY=xai-...
+# Запасной вариант:
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 ```
 
-Без API ключа система работает в stub режиме, форматируя структурированные выводы.
+Приоритет: Grok → OpenAI → stub. Без ключей система работает в stub режиме.
 
 ## Example Prompts
 
