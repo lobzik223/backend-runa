@@ -9,10 +9,15 @@ import { AppModule } from './app.module';
 import { env } from './config/env.validation';
 
 async function bootstrap() {
+  const corsOrigins = env.CORS_ORIGIN === '*'
+    ? true
+    : [...env.CORS_ORIGIN.split(',').map((o) => o.trim()), 'https://runafinance.online'].filter(Boolean);
   const app = await NestFactory.create(AppModule, {
     cors: {
-      origin: env.CORS_ORIGIN === '*' ? true : env.CORS_ORIGIN.split(','),
+      origin: corsOrigins,
       credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Runa-App-Key', 'X-Runa-Site-Key'],
     },
   });
 
@@ -33,6 +38,7 @@ async function bootstrap() {
       const reqPath = req?.originalUrl || req?.url || '';
       const prefix = env.API_PREFIX.replace(/^\//, '');
       const healthPath = `/${prefix}/health`;
+      const paymentsPath = `/${prefix}/payments`;
       // Иконки акций (SVG) — открыты для загрузки в приложении
       if (reqPath.startsWith('/assets/icons')) return next();
       // GET /api/health — открыт для проверки доступности
@@ -44,6 +50,8 @@ async function bootstrap() {
         return res.status(401).json({ statusCode: 401, message: 'Unauthorized' });
       }
       if (reqPath.startsWith(healthPath)) return next();
+      // Платежи с сайта — проверяются по x-runa-site-key в контроллере (CORS разрешает runafinance.online)
+      if (reqPath.startsWith(paymentsPath)) return next();
       const key = req.headers['x-runa-app-key'];
       if (key !== env.APP_KEY) {
         return res.status(401).json({ statusCode: 401, message: 'Unauthorized' });

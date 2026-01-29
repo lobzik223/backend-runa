@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Query, Headers, HttpCode } from '@nestjs/common';
+import { Controller, Post, Get, Body, Headers, BadRequestException } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 
 @Controller('payments')
@@ -12,20 +12,20 @@ export class PaymentsController {
     };
   }
 
-  @Post('create')
-  async createPayment(
+  @Post('demo')
+  async demoPayment(
     @Headers('x-runa-site-key') siteKey: string,
-    @Body() body: { emailOrId: string; planId: string },
+    @Body() body: { name?: string; email?: string; emailOrId?: string; planId: string },
   ) {
     this.paymentsService.validateSiteKey(siteKey);
-    const url = await this.paymentsService.createPaymentUrl(body.emailOrId, body.planId);
-    return { url };
-  }
-
-  @Post('webhook')
-  @HttpCode(200)
-  async handleWebhook(@Query() query: any) {
-    return this.paymentsService.handleRobokassaWebhook(query);
+    const emailOrId = (body.emailOrId ?? body.email ?? '').toString().trim();
+    if (!emailOrId) {
+      throw new BadRequestException('Укажите Email или ID аккаунта');
+    }
+    if (!body.planId) {
+      throw new BadRequestException('Укажите тариф');
+    }
+    return this.paymentsService.grantDemoSubscription(emailOrId, body.planId);
   }
 
   @Get('plans')
