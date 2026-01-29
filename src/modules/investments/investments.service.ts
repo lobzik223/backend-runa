@@ -308,6 +308,7 @@ export class InvestmentsService {
         currentValue: null,
         pnlValue: null,
         pnlPercent: null,
+        logo: getAssetLogoUrl(asset.symbol),
       };
     }
 
@@ -347,6 +348,7 @@ export class InvestmentsService {
       currentValue,
       pnlValue,
       pnlPercent,
+      logo: getAssetLogoUrl(asset.symbol),
     };
   }
 

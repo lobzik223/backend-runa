@@ -8,6 +8,7 @@ export class AssetPortfolioMetrics {
   assetType!: string;
   currency!: string;
   exchange?: string | null;
+  logo?: string;
 
   // Total quantity across all active lots
   totalQuantity!: number;
