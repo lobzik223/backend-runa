@@ -418,6 +418,58 @@ export class AuthService {
     };
   }
 
+  /** Вход/регистрация через Google: проверка id_token, поиск или создание пользователя, выдача JWT. */
+  async loginWithGoogle(input: { idToken: string; ip?: string; userAgent?: string }) {
+    const res = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(input.idToken)}`,
+    ).catch(() => null);
+    if (!res?.ok) throw new UnauthorizedException('Недействительный Google токен');
+
+    const payload = (await res.json()) as { email?: string; name?: string; given_name?: string; family_name?: string; sub?: string };
+    const email = payload.email ? this.normalizeEmail(payload.email) : null;
+    if (!email) throw new UnauthorizedException('Google токен не содержит email');
+
+    const name =
+      payload.name?.trim() ||
+      [payload.given_name, payload.family_name].filter(Boolean).join(' ').trim() ||
+      email.split('@')[0];
+    const safeName = (name ?? email).slice(0, 255);
+
+    let user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true, name: true, createdAt: true },
+    });
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: { email, name: safeName, passwordHash: null },
+        select: { id: true, email: true, name: true, createdAt: true },
+      });
+      await this.ensureUserReferralCode(user.id);
+    }
+
+    const sessionId = randomUUID();
+    const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    await this.prisma.refreshSession.create({
+      data: {
+        id: sessionId,
+        userId: user.id,
+        expiresAt,
+        ip: input.ip,
+        userAgent: input.userAgent,
+      },
+    });
+
+    const tokens = await this.signTokens(user, sessionId);
+
+    return {
+      message: 'ok',
+      user,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  }
+
   async me(userId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
