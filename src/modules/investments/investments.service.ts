@@ -282,8 +282,7 @@ export class InvestmentsService {
     const totalPnlPercent =
       totalPnlValue !== null && totalCost > 0 ? (totalPnlValue / totalCost) * 100 : null;
 
-    const [user, salesAgg, purchasesAgg] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: userId } }),
+    const [salesAgg, purchasesAgg] = await Promise.all([
       this.prisma.transaction.aggregate({
         where: {
           userId,
@@ -302,7 +301,22 @@ export class InvestmentsService {
       }),
     ]);
 
-    const initialBalance = Number((user as { investmentInitialBalance?: unknown } | null)?.investmentInitialBalance ?? 100_000);
+    let initialBalance = 100_000;
+    try {
+      const row = await this.prisma.$queryRawUnsafe<Array<{ investmentInitialBalance?: unknown }>>(
+        'SELECT "investmentInitialBalance" FROM users WHERE id = $1',
+        userId,
+      );
+      const val = row?.[0]?.investmentInitialBalance;
+      if (val !== undefined && val !== null) {
+        initialBalance = Number(val);
+      }
+    } catch (e) {
+      this.logger.warn(
+        '[Investments] investmentInitialBalance not available, using 100000:',
+        (e as Error).message,
+      );
+    }
     const salesSum = Number(salesAgg._sum?.amount ?? 0);
     const purchasesSum = Number(purchasesAgg._sum?.amount ?? 0);
     const availableBalance =
@@ -358,10 +372,18 @@ export class InvestmentsService {
       Math.min(MAX_INVESTMENT_BALANCE, balance - salesSum + purchasesSum),
     );
 
-    await (this.prisma.user as any).update({
-      where: { id: userId },
-      data: { investmentInitialBalance: newInitial },
-    });
+    try {
+      await this.prisma.$executeRawUnsafe(
+        'UPDATE users SET "investmentInitialBalance" = $1 WHERE id = $2',
+        newInitial,
+        userId,
+      );
+    } catch (e) {
+      this.logger.warn('[Investments] updateInvestmentBalance failed:', (e as Error).message);
+      throw new BadRequestException(
+        'Изменение баланса пока недоступно. Выполните обновление сервера (миграцию БД).',
+      );
+    }
 
     const availableBalance = Math.round((newInitial + salesSum - purchasesSum) * 100) / 100;
     return { availableBalance };
