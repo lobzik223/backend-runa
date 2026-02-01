@@ -180,6 +180,23 @@ model PhoneOtp {
   @@map("phone_otps")
 }
 
+// Коды подтверждения по email: регистрация и сброс пароля (6 цифр, 15 мин)
+model EmailVerificationCode {
+  id        String   @id @default(uuid())
+  email     String
+  codeHash  String
+  purpose   String   // 'registration' | 'password_reset'
+  payload   Json?    // для registration: { name, passwordHash, referralCode? }
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  consumedAt DateTime?
+  attempts  Int      @default(0)
+
+  @@index([email, purpose, createdAt])
+  @@index([expiresAt])
+  @@map("email_verification_codes")
+}
+
 model RefreshSession {
   id            String   @id @default(uuid()) // also used as JWT refresh "jti"
   userId        Int

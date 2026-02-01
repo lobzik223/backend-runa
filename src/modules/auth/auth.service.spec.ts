@@ -50,6 +50,10 @@ function createSmsMock() {
   return { sendOtp: jest.fn(async () => undefined) };
 }
 
+function createEmailMock() {
+  return { sendVerificationCode: jest.fn(async () => undefined) };
+}
+
 describe('AuthService (referral + OTP)', () => {
   test('email register: valid referral => both get 7 days trial', async () => {
     const prisma = createPrismaMock();
@@ -70,7 +74,7 @@ describe('AuthService (referral + OTP)', () => {
     prisma.subscription.findUnique.mockResolvedValue(null);
     prisma.subscription.upsert.mockResolvedValue({ id: 's' });
 
-    const svc = new AuthService(prisma as any, jwt as any, sms as any);
+    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any);
 
     const res = await svc.register({
       name: 'A',
@@ -109,7 +113,7 @@ describe('AuthService (referral + OTP)', () => {
     prisma.subscription.findUnique.mockResolvedValue(null);
     prisma.subscription.upsert.mockResolvedValue({ id: 's' });
 
-    const svc = new AuthService(prisma as any, jwt as any, sms as any);
+    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any);
     await svc.register({
       name: 'C',
       email: 'c@d.com',
@@ -131,7 +135,7 @@ describe('AuthService (referral + OTP)', () => {
     prisma.phoneOtp.count.mockResolvedValueOnce(0);
     prisma.phoneOtp.create.mockResolvedValueOnce({ id: 'otp1' });
 
-    const svc = new AuthService(prisma as any, jwt as any, sms as any);
+    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any);
     const res = await svc.requestOtp({ phoneE164: '+79001234567', deviceId: 'device-1', ip: '3.3.3.3' });
 
     expect(res.message).toBe('ok');

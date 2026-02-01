@@ -8,7 +8,11 @@ import { OtpRequestDto } from './dto/otp-request.dto';
 import { OtpVerifyDto } from './dto/otp-verify.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
+import { RequestRegistrationCodeDto } from './dto/request-registration-code.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { VerifyRegistrationCodeDto } from './dto/verify-registration-code.dto';
 import { JwtAccessGuard } from './guards/jwt-access.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import type { JwtAccessPayload, JwtRefreshPayload } from './types/jwt-payload';
@@ -32,6 +36,50 @@ export class AuthController {
       ...cleanDto,
       ip: req.ip,
       userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @Post('request-registration-code')
+  @Throttle({ default: { limit: 5, ttl: 60 } })
+  requestRegistrationCode(@Body() dto: RequestRegistrationCodeDto, @Req() req: Request) {
+    return this.auth.requestRegistrationCode({
+      name: dto.name,
+      email: dto.email,
+      password: dto.password,
+      referralCode: dto.referralCode,
+      deviceId: (req as any).headers?.['x-device-id'],
+      ip: req.ip,
+    });
+  }
+
+  @Post('verify-registration-code')
+  @Throttle({ default: { limit: 10, ttl: 60 } })
+  verifyRegistrationCode(@Body() dto: VerifyRegistrationCodeDto, @Req() req: Request) {
+    return this.auth.verifyRegistrationCode({
+      email: dto.email,
+      code: dto.code,
+      deviceId: (req as any).headers?.['x-device-id'],
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @Post('request-password-reset')
+  @Throttle({ default: { limit: 5, ttl: 60 } })
+  requestPasswordReset(@Body() dto: RequestPasswordResetDto, @Req() req: Request) {
+    return this.auth.requestPasswordReset({
+      email: dto.email,
+      ip: req.ip,
+    });
+  }
+
+  @Post('reset-password')
+  @Throttle({ default: { limit: 10, ttl: 60 } })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.auth.resetPassword({
+      email: dto.email,
+      code: dto.code,
+      newPassword: dto.newPassword,
     });
   }
 

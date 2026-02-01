@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'node:crypto';
 import { env } from '../../config/env.validation';
+import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SmsService } from '../sms/sms.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -13,12 +14,16 @@ type Tokens = {
   refreshToken: string;
 };
 
+const EMAIL_CODE_TTL_MS = 15 * 60 * 1000; // 15 минут
+const EMAIL_RESEND_COOLDOWN_MS = 3 * 60 * 1000; // 3 минуты до повторной отправки
+
 @Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly sms: SmsService,
+    private readonly emailService: EmailService,
   ) {}
 
   private normalizeEmail(email: string): string {
@@ -404,6 +409,228 @@ export class AuthService {
       refreshToken: tokens.refreshToken,
       referralApplied,
     };
+  }
+
+  /** Шаг 1 регистрации по email: отправка 6-значного кода на почту. Повторная отправка — не раньше чем через 3 мин. */
+  async requestRegistrationCode(input: {
+    name: string;
+    email: string;
+    password: string;
+    referralCode?: string;
+    deviceId?: string;
+    ip?: string;
+  }) {
+    const email = this.normalizeEmail(input.email);
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) throw new ConflictException('Email уже зарегистрирован');
+
+    const since = new Date(Date.now() - EMAIL_RESEND_COOLDOWN_MS);
+    const recent = await this.prisma.emailVerificationCode.count({
+      where: { email, purpose: 'registration', createdAt: { gte: since } },
+    });
+    if (recent > 0) {
+      throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
+    }
+
+    const code = this.generateOtpCode();
+    const codeHash = await this.hashOtp(code);
+    const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS);
+
+    const passwordHash = await argon2.hash(input.password, {
+      type: argon2.argon2id,
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1,
+    });
+
+    const payload = {
+      name: input.name.trim(),
+      passwordHash,
+      referralCode: input.referralCode?.trim() || null,
+    };
+
+    await this.prisma.emailVerificationCode.create({
+      data: {
+        email,
+        codeHash,
+        purpose: 'registration',
+        payload: payload as object,
+        expiresAt,
+      },
+    });
+
+    await this.emailService.sendVerificationCode({
+      to: email,
+      code,
+      purpose: 'registration',
+    });
+
+    return { message: 'ok', email };
+  }
+
+  /** Шаг 2 регистрации: проверка кода и создание пользователя, выдача токенов. */
+  async verifyRegistrationCode(input: {
+    email: string;
+    code: string;
+    deviceId?: string;
+    ip?: string;
+    userAgent?: string;
+  }) {
+    const email = this.normalizeEmail(input.email);
+    const code = input.code.trim();
+
+    const record = await this.prisma.emailVerificationCode.findFirst({
+      where: {
+        email,
+        purpose: 'registration',
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!record) throw new UnauthorizedException('Неверный или истёкший код');
+    if (record.attempts >= 5) throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
+
+    const ok = await this.verifyOtpHash(record.codeHash, code);
+    if (!ok) {
+      await this.prisma.emailVerificationCode.update({
+        where: { id: record.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException('Неверный код');
+    }
+
+    const payload = record.payload as { name: string; passwordHash: string; referralCode?: string | null };
+    if (!payload?.name || !payload?.passwordHash) throw new UnauthorizedException('Данные кода повреждены');
+
+    await this.prisma.emailVerificationCode.update({
+      where: { id: record.id },
+      data: { consumedAt: new Date() },
+    });
+
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        name: payload.name,
+        passwordHash: payload.passwordHash,
+      },
+      select: { id: true, email: true, name: true, createdAt: true },
+    });
+
+    const sessionId = randomUUID();
+    const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    await this.prisma.refreshSession.create({
+      data: {
+        id: sessionId,
+        userId: user.id,
+        expiresAt,
+        ip: input.ip,
+        userAgent: input.userAgent,
+      },
+    });
+
+    await this.ensureDeviceSeen({ deviceId: input.deviceId, userId: user.id, ip: input.ip, userAgent: input.userAgent });
+    await this.ensureUserReferralCode(user.id);
+    const referralApplied = await this.applyReferralIfValid({
+      newUserId: user.id,
+      referralCode: payload.referralCode ?? undefined,
+      deviceId: input.deviceId,
+      ip: input.ip,
+    });
+
+    const tokens = await this.signTokens(user, sessionId);
+
+    return {
+      message: 'ok',
+      user,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      referralApplied,
+    };
+  }
+
+  /** Запрос кода для сброса пароля на email. Повтор — не раньше чем через 3 мин. */
+  async requestPasswordReset(input: { email: string; ip?: string }) {
+    const email = this.normalizeEmail(input.email);
+
+    const user = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (!user) {
+      // Не раскрываем, есть ли такой email
+      return { message: 'ok', email };
+    }
+
+    const since = new Date(Date.now() - EMAIL_RESEND_COOLDOWN_MS);
+    const recent = await this.prisma.emailVerificationCode.count({
+      where: { email, purpose: 'password_reset', createdAt: { gte: since } },
+    });
+    if (recent > 0) {
+      throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
+    }
+
+    const code = this.generateOtpCode();
+    const codeHash = await this.hashOtp(code);
+    const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS);
+
+    await this.prisma.emailVerificationCode.create({
+      data: { email, codeHash, purpose: 'password_reset', expiresAt },
+    });
+
+    await this.emailService.sendVerificationCode({
+      to: email,
+      code,
+      purpose: 'password_reset',
+    });
+
+    return { message: 'ok', email };
+  }
+
+  /** Сброс пароля по коду из письма. */
+  async resetPassword(input: { email: string; code: string; newPassword: string; ip?: string }) {
+    const email = this.normalizeEmail(input.email);
+    const code = input.code.trim();
+
+    const record = await this.prisma.emailVerificationCode.findFirst({
+      where: {
+        email,
+        purpose: 'password_reset',
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!record) throw new UnauthorizedException('Неверный или истёкший код');
+    if (record.attempts >= 5) throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
+
+    const ok = await this.verifyOtpHash(record.codeHash, code);
+    if (!ok) {
+      await this.prisma.emailVerificationCode.update({
+        where: { id: record.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException('Неверный код');
+    }
+
+    await this.prisma.emailVerificationCode.update({
+      where: { id: record.id },
+      data: { consumedAt: new Date() },
+    });
+
+    const passwordHash = await argon2.hash(input.newPassword, {
+      type: argon2.argon2id,
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1,
+    });
+
+    await this.prisma.user.update({
+      where: { email },
+      data: { passwordHash },
+    });
+
+    return { message: 'ok' };
   }
 
   async login(input: { email: string; password: string; ip?: string; userAgent?: string }) {

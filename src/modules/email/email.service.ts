@@ -43,7 +43,10 @@ export class EmailService {
   }): Promise<void> {
     const transporter = this.getTransporter();
     if (!transporter) {
-      this.logger.warn(`[DEV Email] ${params.purpose} -> ${params.to}: code=${params.code}`);
+      this.logger.warn(`[DEV Email] SMTP not configured. Would send ${params.purpose} -> ${params.to}: code=${params.code}`);
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('Email service not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env on the server.');
+      }
       return;
     }
 
