@@ -25,7 +25,9 @@ export class AuthController {
       email: dto.email,
       password: dto.password,
     };
-    if (dto.referralCode) cleanDto.referralCode = dto.referralCode;
+    if (dto.referralCode != null && String(dto.referralCode).trim()) {
+      cleanDto.referralCode = String(dto.referralCode).trim();
+    }
     return this.auth.register({
       ...cleanDto,
       ip: req.ip,

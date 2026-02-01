@@ -130,18 +130,21 @@ export class AuthService {
     });
   }
 
+  /**
+   * Applies referral bonus if code is valid. Returns true if both inviter and invitee got 7 days.
+   */
   private async applyReferralIfValid(params: {
     newUserId: number;
     referralCode?: string | null;
     deviceId?: string;
     ip?: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const referralCode = this.normalizeReferralCode(params.referralCode ?? undefined);
 
     // Default: 3 days for new user (even if no/invalid code)
     if (!referralCode) {
       await this.grantTrialDays(params.newUserId, 3);
-      return;
+      return false;
     }
 
     const code = await this.prisma.referralCode.findUnique({
@@ -151,13 +154,13 @@ export class AuthService {
 
     if (!code) {
       await this.grantTrialDays(params.newUserId, 3);
-      return;
+      return false;
     }
 
     // prevent self-referral
     if (code.userId === params.newUserId) {
       await this.grantTrialDays(params.newUserId, 3);
-      return;
+      return false;
     }
 
     // One-time use: each user can be invitee only once ever (DB unique on inviteeUserId).
@@ -166,7 +169,7 @@ export class AuthService {
     });
     if (existingRedemption) {
       await this.grantTrialDays(params.newUserId, 3);
-      return;
+      return false;
     }
 
     // Abuse heuristics:
@@ -179,7 +182,7 @@ export class AuthService {
       });
       if (inviterDevice) {
         await this.grantTrialDays(params.newUserId, 3);
-        return;
+        return false;
       }
     }
 
@@ -190,7 +193,7 @@ export class AuthService {
       });
       if (ipCount >= 3) {
         await this.grantTrialDays(params.newUserId, 3);
-        return;
+        return false;
       }
     }
 
@@ -207,7 +210,7 @@ export class AuthService {
     } catch {
       // If redemption fails (e.g. duplicate invitee), fallback to default 3 days
       await this.grantTrialDays(params.newUserId, 3);
-      return;
+      return false;
     }
 
     // Invitee always gets 7 days
@@ -225,6 +228,7 @@ export class AuthService {
     if (!inviterHasAccess) {
       await this.grantTrialDays(code.userId, 7);
     }
+    return true;
   }
 
   async requestOtp(input: { phoneE164: string; deviceId?: string; ip?: string; userAgent?: string }) {
@@ -389,7 +393,7 @@ export class AuthService {
 
     await this.ensureDeviceSeen({ deviceId: input.deviceId, userId: user.id, ip: input.ip, userAgent: input.userAgent });
     await this.ensureUserReferralCode(user.id);
-    await this.applyReferralIfValid({ newUserId: user.id, referralCode: input.referralCode, deviceId: input.deviceId, ip: input.ip });
+    const referralApplied = await this.applyReferralIfValid({ newUserId: user.id, referralCode: input.referralCode, deviceId: input.deviceId, ip: input.ip });
 
     const tokens = await this.signTokens(user, sessionId);
 
@@ -398,6 +402,7 @@ export class AuthService {
       user,
       token: tokens.accessToken, // keep compatibility with current mobile client
       refreshToken: tokens.refreshToken,
+      referralApplied,
     };
   }
 
