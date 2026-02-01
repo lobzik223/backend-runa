@@ -160,8 +160,16 @@ export class AuthService {
       return;
     }
 
-    // invitee can redeem only once (enforced by DB unique on inviteeUserId)
-    // basic abuse heuristics:
+    // One-time use: each user can be invitee only once ever (DB unique on inviteeUserId).
+    const existingRedemption = await this.prisma.referralRedemption.findUnique({
+      where: { inviteeUserId: params.newUserId },
+    });
+    if (existingRedemption) {
+      await this.grantTrialDays(params.newUserId, 3);
+      return;
+    }
+
+    // Abuse heuristics:
     // - same device already linked to inviter user
     // - too many redemptions from same IP in last 24h
     if (params.deviceId) {
@@ -197,14 +205,26 @@ export class AuthService {
         },
       });
     } catch {
-      // If redemption fails (already redeemed), fallback to default 3 days
+      // If redemption fails (e.g. duplicate invitee), fallback to default 3 days
       await this.grantTrialDays(params.newUserId, 3);
       return;
     }
 
-    // success: both get 7 days
+    // Invitee always gets 7 days
     await this.grantTrialDays(params.newUserId, 7);
-    await this.grantTrialDays(code.userId, 7);
+
+    // Inviter gets 7 days only if they do NOT have active premium or trial
+    const inviter = await this.prisma.user.findUnique({
+      where: { id: code.userId },
+      select: { trialUntil: true, premiumUntil: true },
+    });
+    const now = new Date();
+    const inviterHasAccess =
+      (inviter?.premiumUntil != null && now < inviter.premiumUntil) ||
+      (inviter?.trialUntil != null && now < inviter.trialUntil);
+    if (!inviterHasAccess) {
+      await this.grantTrialDays(code.userId, 7);
+    }
   }
 
   async requestOtp(input: { phoneE164: string; deviceId?: string; ip?: string; userAgent?: string }) {

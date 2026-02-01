@@ -5,6 +5,7 @@ function createPrismaMock() {
     user: {
       findUnique: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
     },
     refreshSession: {
       create: jest.fn(),
@@ -17,6 +18,7 @@ function createPrismaMock() {
       create: jest.fn(),
     },
     referralRedemption: {
+      findUnique: jest.fn(),
       create: jest.fn(),
       count: jest.fn(),
     },
