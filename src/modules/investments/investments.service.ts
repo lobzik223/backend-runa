@@ -11,7 +11,7 @@ import { MarketDataProvider, type AssetSearchResult } from './interfaces/market-
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
 import { PortfolioResponseDto, AssetPortfolioMetrics } from './dto/portfolio-response.dto';
-import { InvestmentAssetType } from '@prisma/client';
+import { InvestmentAssetType, TransactionType } from '@prisma/client';
 import { SearchAssetType } from './dto/search-assets.dto';
 import { getAssetLogoUrl } from './constants/tinkoff-icon-map';
 
@@ -428,19 +428,45 @@ export class InvestmentsService {
   }
 
   /**
-   * Delete asset and all its lots
+   * Delete (sell) asset and all its lots.
+   * Credits user balance with current market value (e.g. if price fell, user gets 970, not 1000).
    */
   async deleteAsset(userId: number, assetId: number) {
     const asset = await this.getAsset(userId, assetId);
 
-    // Delete all lots first
-    await this.prisma.investmentLot.deleteMany({
-      where: { assetId },
-    });
+    let totalQuantity = 0;
+    for (const lot of asset.lots) {
+      totalQuantity += Number(lot.quantity);
+    }
 
-    // Then delete the asset
-    await this.prisma.investmentAsset.delete({
-      where: { id: assetId },
+    const currentPrice = await this.marketDataProvider.getCurrentPrice(
+      asset.symbol,
+      asset.exchange ?? undefined,
+    );
+    const currentValue =
+      currentPrice !== null && totalQuantity > 0 ? totalQuantity * currentPrice : 0;
+
+    await this.prisma.$transaction(async (tx) => {
+      if (currentValue > 0) {
+        await tx.transaction.create({
+          data: {
+            userId,
+            type: TransactionType.INCOME,
+            amount: Math.round(currentValue * 100) / 100,
+            currency: 'RUB',
+            occurredAt: new Date(),
+            note: `Продажа: ${asset.name} (${asset.symbol})`,
+          },
+        });
+      }
+
+      await tx.investmentLot.deleteMany({
+        where: { assetId },
+      });
+
+      await tx.investmentAsset.delete({
+        where: { id: assetId },
+      });
     });
   }
 
