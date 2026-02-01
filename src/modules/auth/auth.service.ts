@@ -1,4 +1,11 @@
-import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'node:crypto';
@@ -19,6 +26,8 @@ const EMAIL_RESEND_COOLDOWN_MS = 3 * 60 * 1000; // 3 минуты до повт�
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
@@ -577,11 +586,18 @@ export class AuthService {
       data: { email, codeHash, purpose: 'password_reset', expiresAt },
     });
 
-    await this.emailService.sendVerificationCode({
-      to: email,
-      code,
-      purpose: 'password_reset',
-    });
+    try {
+      await this.emailService.sendVerificationCode({
+        to: email,
+        code,
+        purpose: 'password_reset',
+      });
+    } catch (err) {
+      this.logger.error(`requestPasswordReset: failed to send email to ${email}`, err);
+      throw new InternalServerErrorException(
+        'Не удалось отправить письмо. Проверьте настройки почты на сервере или попробуйте позже.',
+      );
+    }
 
     return { message: 'ok', email };
   }

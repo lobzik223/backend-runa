@@ -29,8 +29,15 @@ export class EmailService {
     return this.transporter;
   }
 
-  private getFrom(): string {
+  /** Адрес отправителя (для SMTP). */
+  private getFromAddress(): string {
     return env.SMTP_FROM ?? env.SMTP_USER ?? 'noreply@runafinance.online';
+  }
+
+  /** Строка From для письма: "Runa Finance <noreply@runafinance.online>" — так в почте видно имя, а не только noreply. */
+  private getFrom(): string {
+    const address = this.getFromAddress();
+    return `Runa Finance <${address}>`;
   }
 
   /**
@@ -60,7 +67,7 @@ export class EmailService {
 
     try {
       await transporter.sendMail({
-        from: this.getFrom(),
+        from: this.getFrom(), // "Runa Finance <noreply@runafinance.online>" — отображаемое имя в почтовом клиенте
         to: params.to,
         subject,
         text,
