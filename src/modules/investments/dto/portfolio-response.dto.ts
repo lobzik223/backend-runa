@@ -27,6 +27,9 @@ export class AssetPortfolioMetrics {
   pnlPercent!: number | null; // (pnlValue / totalCost) * 100, null if pnlValue is null
 }
 
+/** Начальный баланс инвестиционного счёта (руб). */
+export const INITIAL_INVESTMENT_BALANCE = 100_000;
+
 /**
  * Overall portfolio summary
  */
@@ -38,4 +41,7 @@ export class PortfolioResponseDto {
   totalCurrentValue!: number | null; // Sum of all asset currentValue
   totalPnlValue!: number | null; // totalCurrentValue - totalCost
   totalPnlPercent!: number | null; // (totalPnlValue / totalCost) * 100
+
+  /** Доступный баланс: начальный + доход от продаж − расходы на покупки (инвестиционные транзакции). */
+  availableBalance!: number;
 }

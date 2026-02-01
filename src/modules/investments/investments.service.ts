@@ -11,6 +11,7 @@ import { MarketDataProvider, type AssetSearchResult } from './interfaces/market-
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
 import { PortfolioResponseDto, AssetPortfolioMetrics } from './dto/portfolio-response.dto';
+import { MAX_INVESTMENT_BALANCE } from './dto/update-balance.dto';
 import { InvestmentAssetType, TransactionType } from '@prisma/client';
 import { SearchAssetType } from './dto/search-assets.dto';
 import { getAssetLogoUrl } from './constants/tinkoff-icon-map';
@@ -190,15 +191,33 @@ export class InvestmentsService {
       throw new BadRequestException('Invalid boughtAt date');
     }
 
-    const created = await this.prisma.investmentLot.create({
-      data: {
-        userId,
-        assetId: dto.assetId,
-        quantity: dto.quantity,
-        pricePerUnit: dto.pricePerUnit,
-        fees: dto.fees || 0,
-        boughtAt,
-      },
+    const costAmount =
+      Number(dto.quantity) * Number(dto.pricePerUnit) + Number(dto.fees || 0);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const lot = await tx.investmentLot.create({
+        data: {
+          userId,
+          assetId: dto.assetId,
+          quantity: dto.quantity,
+          pricePerUnit: dto.pricePerUnit,
+          fees: dto.fees || 0,
+          boughtAt,
+        },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: TransactionType.EXPENSE,
+          amount: Math.round(costAmount * 100) / 100,
+          currency: 'RUB',
+          occurredAt: boughtAt,
+          note: `Покупка: ${asset.name} (${asset.symbol})`,
+        },
+      });
+
+      return lot;
     });
 
     // Avoid BigInt JSON serialization issues
@@ -263,13 +282,89 @@ export class InvestmentsService {
     const totalPnlPercent =
       totalPnlValue !== null && totalCost > 0 ? (totalPnlValue / totalCost) * 100 : null;
 
+    const [user, salesAgg, purchasesAgg] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: userId } }),
+      this.prisma.transaction.aggregate({
+        where: {
+          userId,
+          type: TransactionType.INCOME,
+          note: { startsWith: 'Продажа:' },
+        },
+        _sum: { amount: true },
+      }),
+      this.prisma.transaction.aggregate({
+        where: {
+          userId,
+          type: TransactionType.EXPENSE,
+          note: { startsWith: 'Покупка:' },
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const initialBalance = Number((user as { investmentInitialBalance?: unknown } | null)?.investmentInitialBalance ?? 100_000);
+    const salesSum = Number(salesAgg._sum?.amount ?? 0);
+    const purchasesSum = Number(purchasesAgg._sum?.amount ?? 0);
+    const availableBalance =
+      purchasesSum > 0
+        ? initialBalance + salesSum - purchasesSum
+        : initialBalance - totalCost + salesSum;
+
     return {
       assets: assetMetrics,
       totalCost,
       totalCurrentValue: totalCurrentValue > 0 ? totalCurrentValue : null,
       totalPnlValue: totalPnlValue ?? null,
       totalPnlPercent: totalPnlPercent ?? null,
+      availableBalance: Math.round(availableBalance * 100) / 100,
     };
+  }
+
+  /**
+   * Update user's investment available balance (by setting "initial" so that current balance = desired).
+   * Balance must be between 0 and MAX_INVESTMENT_BALANCE (1 trillion).
+   */
+  async updateInvestmentBalance(userId: number, desiredBalance: number): Promise<{ availableBalance: number }> {
+    const balance = Math.round(desiredBalance * 100) / 100;
+    if (balance < 0 || balance > MAX_INVESTMENT_BALANCE) {
+      throw new BadRequestException(
+        `Баланс должен быть от 0 до ${MAX_INVESTMENT_BALANCE.toLocaleString('ru-RU')} ₽`,
+      );
+    }
+
+    const [salesAgg, purchasesAgg] = await Promise.all([
+      this.prisma.transaction.aggregate({
+        where: {
+          userId,
+          type: TransactionType.INCOME,
+          note: { startsWith: 'Продажа:' },
+        },
+        _sum: { amount: true },
+      }),
+      this.prisma.transaction.aggregate({
+        where: {
+          userId,
+          type: TransactionType.EXPENSE,
+          note: { startsWith: 'Покупка:' },
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const salesSum = Number(salesAgg._sum?.amount ?? 0);
+    const purchasesSum = Number(purchasesAgg._sum?.amount ?? 0);
+    const newInitial = Math.max(
+      0,
+      Math.min(MAX_INVESTMENT_BALANCE, balance - salesSum + purchasesSum),
+    );
+
+    await (this.prisma.user as any).update({
+      where: { id: userId },
+      data: { investmentInitialBalance: newInitial },
+    });
+
+    const availableBalance = Math.round((newInitial + salesSum - purchasesSum) * 100) / 100;
+    return { availableBalance };
   }
 
   /**

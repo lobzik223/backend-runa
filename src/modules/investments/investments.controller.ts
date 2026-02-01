@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Body,
   Param,
@@ -12,6 +13,7 @@ import {
 import { InvestmentsService } from './investments.service';
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
+import { UpdateBalanceDto } from './dto/update-balance.dto';
 import { GetCandlesDto, CandleInterval } from './dto/get-candles.dto';
 import { SearchAssetsDto } from './dto/search-assets.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
@@ -84,6 +86,15 @@ export class InvestmentsController {
   @Get('portfolio')
   getPortfolio(@CurrentUser() user: JwtAccessPayload) {
     return this.investmentsService.getPortfolio(user.sub);
+  }
+
+  /**
+   * Update investment available balance (user-editable, max 1 trillion ₽)
+   * PATCH /api/investments/balance
+   */
+  @Patch('balance')
+  updateBalance(@CurrentUser() user: JwtAccessPayload, @Body() dto: UpdateBalanceDto) {
+    return this.investmentsService.updateInvestmentBalance(user.sub, dto.balance);
   }
 
   /**
