@@ -521,16 +521,14 @@ export class InvestmentsService {
   }
 
   /**
-   * Get current quote for an asset
+   * Get current quote for an asset (price + daily change from previous close, как в API Тинькофф)
    */
   async getQuote(userId: number, ticker: string) {
-    // Allow quotes for any ticker (not only user's assets)
     const price = await this.marketDataProvider.getCurrentPrice(ticker, null);
     if (price === null) {
       throw new NotFoundException(`Price not available for ${ticker}`);
     }
 
-    // Try to get asset info from provider
     let name = ticker;
     let currency = 'RUB';
     let exchange: string | null = null;
@@ -546,10 +544,38 @@ export class InvestmentsService {
       // ignore
     }
 
+    // Дневное изменение: цена закрытия предыдущего дня (как в Тинькофф)
+    let change = 0;
+    let changePercent = 0;
+    try {
+      const provider = this.marketDataProvider as any;
+      if (provider.getInstrumentByTicker && provider.getCandles) {
+        const instrument = await provider.getInstrumentByTicker(ticker);
+        if (instrument) {
+          const yesterday = new Date();
+          yesterday.setDate(yesterday.getDate() - 1);
+          const today = new Date();
+          const candles = await provider.getCandles(instrument.figi, yesterday, today, 'DAY');
+          if (candles && candles.length > 0) {
+            const lastCandle = candles[candles.length - 1];
+            const prevClose = lastCandle?.close;
+            if (prevClose != null && prevClose > 0) {
+              change = price - prevClose;
+              changePercent = (change / prevClose) * 100;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.debug(`Could not get daily change for ${ticker}: ${(err as Error)?.message}`);
+    }
+
     return {
       ticker: ticker.toUpperCase(),
       name,
       price,
+      change,
+      changePercent,
       currency,
       exchange,
       logo: getAssetLogoUrl(ticker),
