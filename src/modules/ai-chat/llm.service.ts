@@ -39,15 +39,32 @@ export class LLMService {
   }
 
   /**
+   * Detect response language from user message if not specified.
+   * More Latin letters -> English; otherwise Russian.
+   */
+  private detectResponseLanguage(userMessage: string): 'ru' | 'en' {
+    const sample = userMessage.slice(0, 300).replace(/\s/g, '');
+    if (!sample.length) return 'ru';
+    const latin = (sample.match(/[a-zA-Z]/g) || []).length;
+    const cyrillic = (sample.match(/[а-яА-ЯёЁ]/g) || []).length;
+    return latin > cyrillic ? 'en' : 'ru';
+  }
+
+  /**
    * Convert structured outputs to natural language.
    * webSearchResults — актуальные данные из поиска; модель должна опираться только на них (не на примеры и не на старые знания).
+   * preferredLanguage — язык ответа (ru/en); если не передан, определяется по тексту сообщения.
    */
   async generateResponse(
     userMessage: string,
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
+    preferredLanguage?: 'ru' | 'en',
   ): Promise<LLMResponse> {
+    const responseLanguage = preferredLanguage ?? this.detectResponseLanguage(userMessage);
+    this.logger.log(`[LLM] responseLanguage=${responseLanguage} (preferred=${preferredLanguage ?? 'auto'})`);
+
     const useGrok = !!this.grokApiKey;
     const useOpenAI = !!this.openaiApiKey;
     this.logger.log(`[LLM] useGrok=${useGrok}, useOpenAI=${useOpenAI}, searchResults=${webSearchResults.length}`);
@@ -60,11 +77,11 @@ export class LLMService {
     try {
       if (useGrok) {
         this.logger.log('[LLM] Using Grok (xAI)');
-        return await this.callGrok(userMessage, structuredOutputs, financeContext, webSearchResults);
+        return await this.callGrok(userMessage, structuredOutputs, financeContext, webSearchResults, responseLanguage);
       }
       if (useOpenAI) {
         this.logger.log('[LLM] Using OpenAI');
-        return await this.callOpenAI(userMessage, structuredOutputs, financeContext, webSearchResults);
+        return await this.callOpenAI(userMessage, structuredOutputs, financeContext, webSearchResults, responseLanguage);
       }
       return this.generateStubResponse(structuredOutputs);
     } catch (error) {
@@ -79,6 +96,7 @@ export class LLMService {
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
+    responseLanguage: 'ru' | 'en' = 'ru',
   ): string {
     const recentTransactionsText = financeContext.recentTransactions
       .slice(0, 15)
@@ -232,6 +250,7 @@ ${structuredOutputs.length > 0
 - ПИШИТЕ БЕЗ ИСПОЛЬЗОВАНИЯ ** (ДВОЙНЫХ ЗВЕЗДОЧЕК).
 - КУРСЫ ВАЛЮТ: на вопросы про курс рубля к доллару/евро отвечай ТОЛЬКО цифрами из блока «АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ» выше; всегда указывай дату курса; никогда не подставляй курсы из своей обучающей выборки (иначе будут старые данные).
 - ФАКТЫ И ДАТЫ: для любых фактов, цифр, дат, событий используй ТОЛЬКО данные из блока «АКТУАЛЬНЫЕ ДАННЫЕ ИЗ ПОИСКА» (если он есть) и из данных пользователя; не давай примеры из головы и не используй старые знания из обучающей выборки.
+${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. All your response must be in English.' : '\nЯЗЫК ОТВЕТА: Отвечай ТОЛЬКО на русском языке. Весь твой ответ должен быть на русском.'}
 `.trim();
   }
 
@@ -240,12 +259,13 @@ ${structuredOutputs.length > 0
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
+    responseLanguage: 'ru' | 'en' = 'ru',
   ): Promise<LLMResponse> {
     if (!this.grokApiKey) {
       throw new Error('Grok не настроен: задайте GROK_API_KEY или XAI_API_KEY в .env');
     }
 
-    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults);
+    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults, responseLanguage);
 
     const requestBody = {
       model: this.grokModel,
@@ -306,8 +326,9 @@ ${structuredOutputs.length > 0
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
+    responseLanguage: 'ru' | 'en' = 'ru',
   ): Promise<LLMResponse> {
-    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults);
+    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults, responseLanguage);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

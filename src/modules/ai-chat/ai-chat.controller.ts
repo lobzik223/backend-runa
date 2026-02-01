@@ -16,7 +16,7 @@ export class AIChatController {
    */
   @Post('chat')
   async sendMessage(@CurrentUser() user: JwtAccessPayload, @Body() dto: ChatMessageDto) {
-    return this.aiChatService.sendMessage(user.sub, dto.message, dto.threadId);
+    return this.aiChatService.sendMessage(user.sub, dto.message, dto.threadId, dto.preferredLanguage);
   }
 
   /**

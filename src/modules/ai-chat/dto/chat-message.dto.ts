@@ -1,4 +1,4 @@
-import { IsString, IsOptional, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsOptional, MinLength, MaxLength, IsIn } from 'class-validator';
 
 export class ChatMessageDto {
   @IsString()
@@ -9,4 +9,9 @@ export class ChatMessageDto {
   @IsString()
   @IsOptional()
   threadId?: string;
+
+  /** Язык ответа: ru | en. Если не передан — определяется по тексту сообщения. */
+  @IsOptional()
+  @IsIn(['ru', 'en'])
+  preferredLanguage?: 'ru' | 'en';
 }

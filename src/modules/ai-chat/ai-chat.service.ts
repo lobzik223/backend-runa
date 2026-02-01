@@ -50,6 +50,7 @@ export class AIChatService {
     userId: number,
     userMessage: string,
     threadId?: string,
+    preferredLanguage?: 'ru' | 'en',
   ): Promise<ChatResponse> {
     // 1. Очистка старых сообщений перед обработкой нового
     await this.cleanupOldMessages(userId);
@@ -127,12 +128,13 @@ export class AIChatService {
     // Поиск актуальных данных по запросу пользователя (курсы, даты, факты)
     const webSearchResults = await this.webSearchService.search(userMessage);
 
-    // Generate LLM response
+    // Generate LLM response (language: from param or detect from message)
     const llmResponse = await this.llmService.generateResponse(
       userMessage,
       structuredOutputs,
       financeContext,
       webSearchResults,
+      preferredLanguage,
     );
 
     // Save assistant message
