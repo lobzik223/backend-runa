@@ -378,11 +378,35 @@ export class InvestmentsService {
         newInitial,
         userId,
       );
-    } catch (e) {
-      this.logger.warn('[Investments] updateInvestmentBalance failed:', (e as Error).message);
-      throw new BadRequestException(
-        'Изменение баланса пока недоступно. Выполните обновление сервера (миграцию БД).',
-      );
+    } catch (e: unknown) {
+      const msg = (e as Error)?.message ?? '';
+      // Колонка ещё не создана — добавляем и повторяем UPDATE
+      if (
+        typeof msg === 'string' &&
+        (msg.includes('investmentInitialBalance') || msg.includes('column') || msg.includes('does not exist'))
+      ) {
+        try {
+          await this.prisma.$executeRawUnsafe(`
+            ALTER TABLE "users"
+            ADD COLUMN IF NOT EXISTS "investmentInitialBalance" DECIMAL(18,2) NOT NULL DEFAULT 100000
+          `);
+          await this.prisma.$executeRawUnsafe(
+            'UPDATE users SET "investmentInitialBalance" = $1 WHERE id = $2',
+            newInitial,
+            userId,
+          );
+        } catch (retryErr) {
+          this.logger.warn('[Investments] updateInvestmentBalance retry failed:', (retryErr as Error).message);
+          throw new BadRequestException(
+            'Изменение баланса пока недоступно. Выполните обновление сервера (миграцию БД).',
+          );
+        }
+      } else {
+        this.logger.warn('[Investments] updateInvestmentBalance failed:', msg);
+        throw new BadRequestException(
+          'Изменение баланса пока недоступно. Выполните обновление сервера (миграцию БД).',
+        );
+      }
     }
 
     const availableBalance = Math.round((newInitial + salesSum - purchasesSum) * 100) / 100;
