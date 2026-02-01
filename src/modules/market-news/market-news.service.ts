@@ -11,15 +11,24 @@ export interface MarketNewsItem {
   publishedAt: Date;
 }
 
-/** RSS-ленты: MOEX (фондовый рынок) и ЦБ РФ (финансы) как запасной вариант */
-const RSS_SOURCES: { url: string; source: string }[] = [
-  { url: 'https://www.moex.com/export/news.aspx?cat=200', source: 'MOEX' },
-  { url: 'https://www.moex.com/export/news.aspx?cat=201', source: 'MOEX' },
-  { url: 'https://www.cbr.ru/rss/daily.asp', source: 'ЦБ РФ' },
-];
+type MarketNewsLang = 'ru' | 'en';
+
+function getRssSources(lang: MarketNewsLang): { url: string; source: string }[] {
+  const moexSource = lang === 'ru' ? 'Московская биржа' : 'Moscow Exchange';
+  const cbrSource = lang === 'ru' ? 'ЦБ РФ' : 'Bank of Russia';
+  return [
+    { url: 'https://www.moex.com/export/news.aspx?cat=200', source: moexSource },
+    { url: 'https://www.moex.com/export/news.aspx?cat=201', source: moexSource },
+    { url: 'https://www.cbr.ru/rss/daily.asp', source: cbrSource },
+  ];
+}
 
 const RSS_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+function getAcceptLanguage(lang: MarketNewsLang): string {
+  return lang === 'ru' ? 'ru-RU, ru;q=0.9, en;q=0.8' : 'en-US, en;q=0.9, ru;q=0.2';
+}
 
 @Injectable()
 export class MarketNewsService {
@@ -34,7 +43,7 @@ export class MarketNewsService {
   /**
    * Get latest N news items. If DB is empty, fetches from MOEX RSS.
    */
-  async getLatestNews(limit: number = 20): Promise<MarketNewsItem[]> {
+  async getLatestNews(limit: number = 20, lang: MarketNewsLang = 'ru'): Promise<MarketNewsItem[]> {
     try {
       const dbNews = await (this.prisma as any).marketNews.findMany({
         take: limit,
@@ -55,7 +64,7 @@ export class MarketNewsService {
       this.logger.warn('[MarketNews] DB read failed, falling back to RSS:', (e as Error).message);
     }
 
-    const fromRss = await this.fetchFromRss(limit);
+    const fromRss = await this.fetchFromRss(limit, lang);
     if (fromRss.length > 0) return fromRss;
     return [];
   }
@@ -63,11 +72,28 @@ export class MarketNewsService {
   /**
    * Fetch RSS by URL: сначала fetch, затем parseString (надёжнее для некоторых серверов).
    */
-  private async fetchRssFeed(url: string): Promise<{ items?: Array<{ title?: string; link?: string; guid?: string; content?: string; contentSnippet?: string; pubDate?: string; isoDate?: string }> } | null> {
+  private async fetchRssFeed(
+    url: string,
+    lang: MarketNewsLang,
+  ): Promise<{
+    items?: Array<{
+      title?: string;
+      link?: string;
+      guid?: string;
+      content?: string;
+      contentSnippet?: string;
+      pubDate?: string;
+      isoDate?: string;
+    }>;
+  } | null> {
     try {
       const res = await fetch(url, {
         method: 'GET',
-        headers: { 'User-Agent': RSS_USER_AGENT, Accept: 'application/rss+xml, application/xml, text/xml' },
+        headers: {
+          'User-Agent': RSS_USER_AGENT,
+          Accept: 'application/rss+xml, application/xml, text/xml',
+          'Accept-Language': getAcceptLanguage(lang),
+        },
         signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) {
@@ -85,13 +111,13 @@ export class MarketNewsService {
   /**
    * Загрузка новостей из RSS (MOEX, ЦБ РФ и т.д.).
    */
-  private async fetchFromRss(limit: number): Promise<MarketNewsItem[]> {
+  private async fetchFromRss(limit: number, lang: MarketNewsLang): Promise<MarketNewsItem[]> {
     const seen = new Set<string>();
     const items: MarketNewsItem[] = [];
 
-    for (const { url, source } of RSS_SOURCES) {
+    for (const { url, source } of getRssSources(lang)) {
       if (items.length >= limit) break;
-      const feed = await this.fetchRssFeed(url);
+      const feed = await this.fetchRssFeed(url, lang);
       if (!feed?.items?.length) continue;
       for (const item of feed.items) {
         if (items.length >= limit) break;
@@ -102,7 +128,7 @@ export class MarketNewsService {
         const title = (item.title ?? '').trim();
         if (!title) continue;
         const content =
-          (item.contentSnippet ?? item.content ?? '').replace(/<[^>]+>/g, ' ').trim().slice(0, 2000) || title;
+          (item.contentSnippet ?? item.content ?? '').replace(/<[^>]+>/g, ' ').trim().slice(0, 6000) || title;
         const pubDate = item.pubDate ?? item.isoDate;
         items.push({
           id,

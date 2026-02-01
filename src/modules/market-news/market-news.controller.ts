@@ -8,11 +8,15 @@ export class MarketNewsController {
 
   /**
    * Get latest market news
-   * GET /api/market-news?limit=20
+   * GET /api/market-news?limit=20&lang=ru|en
    */
   @Get()
-  getLatestNews(@Query('limit', new ParseIntPipe({ optional: true })) limit?: number) {
-    return this.marketNewsService.getLatestNews(limit || 20);
+  getLatestNews(
+    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('lang') lang?: string,
+  ) {
+    const normalized = lang === 'en' ? 'en' : 'ru';
+    return this.marketNewsService.getLatestNews(limit || 20, normalized);
   }
 
   /**

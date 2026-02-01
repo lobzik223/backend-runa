@@ -210,26 +210,71 @@ export class PushNotificationsService {
   }
 
   /**
-   * Send push notification (placeholder - integrate with FCM/APNs in production)
+   * Send push notification via Expo Push API.
+   * Tokens are expected to be Expo push tokens from `expo-notifications`.
    */
   async sendPushNotification(
     token: string,
     platform: string | null,
     payload: PushNotificationPayload,
   ): Promise<boolean> {
-    // TODO: Integrate with FCM (Firebase Cloud Messaging) for Android
-    // TODO: Integrate with APNs (Apple Push Notification service) for iOS
-    // For now, just log the notification
+    const isExpoToken =
+      token.startsWith('ExponentPushToken[') || token.startsWith('ExpoPushToken[') || token.startsWith('ExpoPushToken');
 
-    this.logger.log(
-      `[PUSH] Sending to ${platform || 'unknown'} token ${token.substring(0, 20)}...: ${payload.title} - ${payload.body}`,
-    );
+    if (!isExpoToken) {
+      this.logger.warn(`[PUSH] Not an Expo token (${platform || 'unknown'}): ${token.substring(0, 20)}...`);
+      return false;
+    }
 
-    // In production, this would call:
-    // - FCM API for Android: https://fcm.googleapis.com/v1/projects/{project_id}/messages:send
-    // - APNs API for iOS: https://api.push.apple.com/3/device/{token}
+    try {
+      const res = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: token,
+          title: payload.title,
+          body: payload.body,
+          data: payload.data,
+          sound: 'default',
+          channelId: 'runa_finance_default',
+        }),
+      });
 
-    return true;
+      const json: any = await res.json().catch(() => null);
+      const entry = Array.isArray(json?.data) ? json.data[0] : json?.data;
+      const ok = res.ok && entry?.status === 'ok';
+
+      if (!ok) {
+        const err = entry?.message || entry?.details?.error || json?.errors?.[0]?.message || res.statusText;
+        this.logger.warn(
+          `[PUSH] Failed (${platform || 'unknown'}) ${token.substring(0, 20)}...: ${String(err)}`,
+        );
+
+        // If token is invalid/unregistered — clear it to avoid repeated failures
+        const errStr = String(entry?.details?.error || err || '').toLowerCase();
+        if (
+          errStr.includes('device') ||
+          errStr.includes('notregistered') ||
+          errStr.includes('invalid') ||
+          errStr.includes('push token')
+        ) {
+          await this.prisma.device.updateMany({
+            where: { pushToken: token },
+            data: { pushToken: null, pushTokenUpdatedAt: null },
+          });
+        }
+
+        return false;
+      }
+
+      this.logger.log(
+        `[PUSH] Sent (${platform || 'unknown'}) ${token.substring(0, 20)}...: ${payload.title}`,
+      );
+      return true;
+    } catch (e) {
+      this.logger.warn(`[PUSH] Error sending push: ${(e as Error).message}`);
+      return false;
+    }
   }
 
   /**
