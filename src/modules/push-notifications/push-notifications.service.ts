@@ -52,7 +52,6 @@ export class PushNotificationsService {
     });
 
     if (!device) {
-      // Create new device record
       return this.prisma.device.create({
         data: {
           deviceId: dto.deviceId,
@@ -60,11 +59,11 @@ export class PushNotificationsService {
           platform: dto.platform || null,
           pushToken: dto.pushToken || null,
           pushTokenUpdatedAt: dto.pushToken ? new Date() : null,
+          preferredLocale: dto.preferredLocale ?? null,
         },
       });
     }
 
-    // Update existing device
     return this.prisma.device.update({
       where: { deviceId: dto.deviceId },
       data: {
@@ -74,15 +73,18 @@ export class PushNotificationsService {
           pushToken: dto.pushToken,
           pushTokenUpdatedAt: dto.pushToken ? new Date() : null,
         }),
+        ...(dto.preferredLocale !== undefined && { preferredLocale: dto.preferredLocale }),
         lastSeenAt: new Date(),
       },
     });
   }
 
   /**
-   * Get all active push tokens for a user
+   * Get all active push tokens for a user (with preferred locale from first device)
    */
-  async getUserPushTokens(userId: number): Promise<Array<{ token: string; platform: string | null }>> {
+  async getUserPushTokens(
+    userId: number,
+  ): Promise<Array<{ token: string; platform: string | null; preferredLocale: string | null }>> {
     const devices = await this.prisma.device.findMany({
       where: {
         userId,
@@ -91,6 +93,7 @@ export class PushNotificationsService {
       select: {
         pushToken: true,
         platform: true,
+        preferredLocale: true,
       },
     });
 
@@ -99,30 +102,50 @@ export class PushNotificationsService {
       .map((d) => ({
         token: d.pushToken!,
         platform: d.platform || 'unknown',
+        preferredLocale: d.preferredLocale ?? null,
       }));
   }
 
   /**
-   * Format notification message based on event kind
+   * Format notification message by event kind and locale (ru/en)
    */
-  private formatNotificationMessage(kind: string, amount?: number | null, currency: string = 'RUB'): string {
+  private formatNotificationMessage(
+    kind: string,
+    locale: 'ru' | 'en',
+    amount?: number | null,
+    currency: string = 'RUB',
+  ): string {
+    const isEn = locale === 'en';
     const formattedAmount = amount
-      ? new Intl.NumberFormat('ru-RU', {
+      ? new Intl.NumberFormat(isEn ? 'en-US' : 'ru-RU', {
           style: 'currency',
           currency: currency,
           minimumFractionDigits: 0,
         }).format(Number(amount))
       : '';
 
+    if (isEn) {
+      switch (kind) {
+        case 'CREDIT_PAYMENT':
+          return `Tomorrow: 💳 Credit payment due${formattedAmount ? ` ${formattedAmount}` : ''}. Don’t miss it.`;
+        case 'DEPOSIT_INTEREST':
+          return `Tomorrow: 💰 Deposit interest${formattedAmount ? ` ${formattedAmount}` : ''}. Don’t miss it.`;
+        case 'GOAL_CONTRIBUTION':
+          return `Tomorrow: 🎯 Goal contribution${formattedAmount ? ` ${formattedAmount}` : ''}. Don’t miss it.`;
+        default:
+          return `Tomorrow you have a planned action. Don’t miss it.`;
+      }
+    }
+
     switch (kind) {
       case 'CREDIT_PAYMENT':
-        return `Завтра день X. У тебя по плану финансовое действие: — 💳 Платёж по кредиту${formattedAmount ? ` ${formattedAmount}` : ''}. Не пропусти. Дисциплина = свобода.`;
+        return `Завтра: 💳 Платёж по кредиту${formattedAmount ? ` ${formattedAmount}` : ''}. Не пропусти.`;
       case 'DEPOSIT_INTEREST':
-        return `Завтра день X. У тебя по плану финансовое действие: — 💰 Проценты по вкладу${formattedAmount ? ` ${formattedAmount}` : ''}. Не пропусти. Дисциплина = свобода.`;
+        return `Завтра: 💰 Проценты по вкладу${formattedAmount ? ` ${formattedAmount}` : ''}. Не пропусти.`;
       case 'GOAL_CONTRIBUTION':
-        return `Завтра день X. У тебя по плану финансовое действие: — 🎯 Вклад в цель${formattedAmount ? ` ${formattedAmount}` : ''}. Не пропусти. Дисциплина = свобода.`;
+        return `Завтра: 🎯 Вклад в цель${formattedAmount ? ` ${formattedAmount}` : ''}. Не пропусти.`;
       default:
-        return `Завтра день X. У тебя по плану финансовое действие. Не пропусти. Дисциплина = свобода.`;
+        return `Завтра у тебя запланировано действие. Не пропусти.`;
     }
   }
 
@@ -278,7 +301,7 @@ export class PushNotificationsService {
   }
 
   /**
-   * Send notification for a scheduled event
+   * Send notification for a scheduled event (locale from device or default ru)
    */
   async sendScheduledEventNotification(
     userId: number,
@@ -294,8 +317,9 @@ export class PushNotificationsService {
       return;
     }
 
+    const locale: 'ru' | 'en' = (tokens[0]?.preferredLocale === 'en' ? 'en' : 'ru') as 'ru' | 'en';
     const title = 'RUNA Finance';
-    const body = this.formatNotificationMessage(eventKind, amount, currency);
+    const body = this.formatNotificationMessage(eventKind, locale, amount, currency);
     const data = {
       eventId: String(eventId),
       eventKind,

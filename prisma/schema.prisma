@@ -148,6 +148,9 @@ model Device {
   pushToken String?
   pushTokenUpdatedAt DateTime?
 
+  // Preferred language for push messages: ru | en (from device/app)
+  preferredLocale String? // 'ru' | 'en'
+
   firstSeenAt DateTime @default(now())
   lastSeenAt  DateTime @default(now())
 

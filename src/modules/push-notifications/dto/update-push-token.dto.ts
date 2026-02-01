@@ -1,4 +1,4 @@
-import { IsString, IsEnum, IsOptional } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsIn } from 'class-validator';
 
 export enum Platform {
   IOS = 'ios',
@@ -17,4 +17,9 @@ export class UpdatePushTokenDto {
   @IsEnum(Platform)
   @IsOptional()
   platform?: Platform;
+
+  /** Preferred language for push messages: ru | en (from app/device) */
+  @IsOptional()
+  @IsIn(['ru', 'en'])
+  preferredLocale?: 'ru' | 'en';
 }
