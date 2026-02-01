@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { EmailModule } from '../email/email.module';
 import { SmsModule } from '../sms/sms.module';
 import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
 import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
@@ -11,6 +12,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
   imports: [
     PassportModule,
     JwtModule.register({}), // secrets are provided at sign/verify time
+    EmailModule,
     SmsModule,
   ],
   controllers: [AuthController],

@@ -50,6 +50,12 @@ const envSchema = z
   // Dynamic config
   SUBSCRIPTION_SITE_URL: z.string().url().default('https://runafinance.online/premium'),
 
+  // SMTP (Timeweb или другой хостинг) — для кодов на почту (подтверждение регистрации, сброс пароля)
+  SMTP_HOST: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  SMTP_PORT: z.preprocess((v) => (v === '' ? undefined : v), z.coerce.number().int().positive().optional()),
+  SMTP_USER: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  SMTP_PASS: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+  SMTP_FROM: z.preprocess((v) => (v === '' ? undefined : v), z.string().email().optional()),
   })
   .superRefine((v, ctx) => {
     // В проде всегда требуем APP_KEY, чтобы API не был открыт “наружу”.
