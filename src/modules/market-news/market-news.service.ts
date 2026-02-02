@@ -41,9 +41,17 @@ export class MarketNewsService {
   constructor(private prisma: PrismaService) {}
 
   /**
-   * Get latest N news items. If DB is empty, fetches from MOEX RSS.
+   * Get latest N news items. Сначала запрашиваем RSS с нужным языком (ru/en),
+   * чтобы при русском интерфейсе приходили русские новости. Если RSS пустой — fallback на БД.
    */
   async getLatestNews(limit: number = 20, lang: MarketNewsLang = 'ru'): Promise<MarketNewsItem[]> {
+    try {
+      const fromRss = await this.fetchFromRss(limit, lang);
+      if (fromRss.length > 0) return fromRss;
+    } catch (e) {
+      this.logger.warn('[MarketNews] RSS fetch failed, trying DB:', (e as Error).message);
+    }
+
     try {
       const dbNews = await (this.prisma as any).marketNews.findMany({
         take: limit,
@@ -61,11 +69,9 @@ export class MarketNewsService {
         }));
       }
     } catch (e) {
-      this.logger.warn('[MarketNews] DB read failed, falling back to RSS:', (e as Error).message);
+      this.logger.warn('[MarketNews] DB read failed:', (e as Error).message);
     }
 
-    const fromRss = await this.fetchFromRss(limit, lang);
-    if (fromRss.length > 0) return fromRss;
     return [];
   }
 
