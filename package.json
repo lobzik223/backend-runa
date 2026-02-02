@@ -19,7 +19,8 @@
     "subscription:revoke": "node scripts/subscription-admin.js revoke",
     "push:send": "ts-node -r tsconfig-paths/register src/scripts/send-push.ts",
     "db:delete-all-users": "node scripts/delete-all-users.js",
-    "db:add-admin": "node scripts/add-admin.js"
+    "db:add-admin": "node scripts/add-admin.js",
+    "db:remove-admin": "node scripts/remove-admin.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
