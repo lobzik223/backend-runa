@@ -56,6 +56,10 @@ const envSchema = z
   SMTP_USER: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
   SMTP_PASS: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
   SMTP_FROM: z.preprocess((v) => (v === '' ? undefined : v), z.string().email().optional()),
+
+  // Data retention (храним историю только последние N дней)
+  DATA_RETENTION_ENABLED: z.preprocess((v) => v === 'true' || v === '1', z.boolean()).default(true),
+  DATA_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
   })
   .superRefine((v, ctx) => {
     // В проде всегда требуем APP_KEY, чтобы API не был открыт “наружу”.
