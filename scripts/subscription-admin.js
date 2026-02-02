@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
  * Выдать или снять Premium подписку пользователю (по email или id).
+ * Требуется вход в админ-аккаунт (email + пароль).
+ *
  * Запуск с сервера (внутри контейнера или на хосте из папки backend-runa):
  *
  *   node scripts/subscription-admin.js grant <email или userId> [дней]
@@ -19,6 +21,8 @@
 
 require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
+const { requireAdminLogin } = require('./lib/admin-auth');
+
 const prisma = new PrismaClient();
 
 const args = process.argv.slice(2);
@@ -100,20 +104,25 @@ async function revoke(identifier) {
 }
 
 async function main() {
-  if (cmd === 'grant' && identifier) {
+  if (cmd !== 'grant' && cmd !== 'revoke') {
+    console.error('Usage:');
+    console.error('  node scripts/subscription-admin.js grant <email|userId> [days]');
+    console.error('  node scripts/subscription-admin.js revoke <email|userId>');
+    process.exit(1);
+  }
+  if (!identifier) {
+    console.error('Укажите email или id пользователя.');
+    process.exit(1);
+  }
+
+  await requireAdminLogin(prisma);
+
+  if (cmd === 'grant') {
     await grant(identifier, daysArg);
-    await prisma.$disconnect();
-    return;
-  }
-  if (cmd === 'revoke' && identifier) {
+  } else {
     await revoke(identifier);
-    await prisma.$disconnect();
-    return;
   }
-  console.error('Usage:');
-  console.error('  node scripts/subscription-admin.js grant <email|userId> [days]');
-  console.error('  node scripts/subscription-admin.js revoke <email|userId>');
-  process.exit(1);
+  await prisma.$disconnect();
 }
 
 main().catch((e) => {

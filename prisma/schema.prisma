@@ -657,3 +657,13 @@ model AiInsight {
   @@index([userId, acknowledgedAt])
   @@map("ai_insights")
 }
+
+// Админ-аккаунты для CLI и опасных операций. Не связаны с User.
+model Admin {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  @@map("admins")
+}
