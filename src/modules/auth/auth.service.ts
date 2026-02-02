@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   InternalServerErrorException,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -429,53 +431,59 @@ export class AuthService {
     deviceId?: string;
     ip?: string;
   }) {
-    const email = this.normalizeEmail(input.email);
+    try {
+      const email = this.normalizeEmail(input.email);
 
-    const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing) throw new ConflictException('Email уже зарегистрирован');
+      const existing = await this.prisma.user.findUnique({ where: { email } });
+      if (existing) throw new ConflictException('Email уже зарегистрирован');
 
-    const since = new Date(Date.now() - EMAIL_RESEND_COOLDOWN_MS);
-    const recent = await this.prisma.emailVerificationCode.count({
-      where: { email, purpose: 'registration', createdAt: { gte: since } },
-    });
-    if (recent > 0) {
-      throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
-    }
+      const since = new Date(Date.now() - EMAIL_RESEND_COOLDOWN_MS);
+      const recent = await this.prisma.emailVerificationCode.count({
+        where: { email, purpose: 'registration', createdAt: { gte: since } },
+      });
+      if (recent > 0) {
+        throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
+      }
 
-    const code = this.generateOtpCode();
-    const codeHash = await this.hashOtp(code);
-    const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS);
+      const code = this.generateOtpCode();
+      const codeHash = await this.hashOtp(code);
+      const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS);
 
-    const passwordHash = await argon2.hash(input.password, {
-      type: argon2.argon2id,
-      memoryCost: 19456,
-      timeCost: 2,
-      parallelism: 1,
-    });
+      const passwordHash = await argon2.hash(input.password, {
+        type: argon2.argon2id,
+        memoryCost: 19456,
+        timeCost: 2,
+        parallelism: 1,
+      });
 
-    const payload = {
-      name: input.name.trim(),
-      passwordHash,
-      referralCode: input.referralCode?.trim() || null,
-    };
+      const payload = {
+        name: input.name.trim(),
+        passwordHash,
+        referralCode: input.referralCode?.trim() || null,
+      };
 
-    await this.prisma.emailVerificationCode.create({
-      data: {
-        email,
-        codeHash,
+      await this.prisma.emailVerificationCode.create({
+        data: {
+          email,
+          codeHash,
+          purpose: 'registration',
+          payload: payload as object,
+          expiresAt,
+        },
+      });
+
+      await this.emailService.sendVerificationCode({
+        to: email,
+        code,
         purpose: 'registration',
-        payload: payload as object,
-        expiresAt,
-      },
-    });
+      });
 
-    await this.emailService.sendVerificationCode({
-      to: email,
-      code,
-      purpose: 'registration',
-    });
-
-    return { message: 'ok', email };
+      return { message: 'ok', email };
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      this.logger.error('requestRegistrationCode failed', err);
+      throw new ServiceUnavailableException('Сервис временно недоступен. Попробуйте позже.');
+    }
   }
 
   /** Шаг 2 регистрации: проверка кода и создание пользователя, выдача токенов. */
