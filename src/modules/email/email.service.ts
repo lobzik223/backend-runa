@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { env } from '../../config/env.validation';
@@ -50,10 +50,7 @@ export class EmailService {
   }): Promise<void> {
     const transporter = this.getTransporter();
     if (!transporter) {
-      this.logger.warn(`[DEV Email] SMTP not configured. Would send ${params.purpose} -> ${params.to}: code=${params.code}`);
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error('Email service not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env on the server.');
-      }
+      this.logger.warn(`SMTP not configured. Would send ${params.purpose} -> ${params.to}: code=${params.code}`);
       return;
     }
 
@@ -76,7 +73,7 @@ export class EmailService {
       this.logger.log(`Email sent to ${params.to} (${params.purpose})`);
     } catch (err) {
       this.logger.error(`Failed to send email to ${params.to}:`, err);
-      throw err;
+      throw new ServiceUnavailableException('Не удалось отправить письмо. Попробуйте позже.');
     }
   }
 }
