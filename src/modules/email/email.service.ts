@@ -20,11 +20,14 @@ export class EmailService {
       this.logger.warn('SMTP not configured (SMTP_HOST, SMTP_USER, SMTP_PASS). Emails will not be sent.');
       return null;
     }
+    const portNum = Number(port);
     this.transporter = nodemailer.createTransport({
       host,
-      port: Number(port),
-      secure: port === 465,
+      port: portNum,
+      secure: portNum === 465,
       auth: { user, pass },
+      connectionTimeout: 20000,
+      greetingTimeout: 15000,
     });
     return this.transporter;
   }
@@ -41,7 +44,7 @@ export class EmailService {
   }
 
   /**
-   * Отправка кода на почту (подтверждение регистрации или сброс пароля).
+   * Отправка кода на почту (подтверждение регистрации или сброс пароля) через SMTP.
    */
   async sendVerificationCode(params: {
     to: string;
@@ -64,7 +67,7 @@ export class EmailService {
 
     try {
       await transporter.sendMail({
-        from: this.getFrom(), // "Runa Finance <noreply@runafinance.online>" — отображаемое имя в почтовом клиенте
+        from: this.getFrom(),
         to: params.to,
         subject,
         text,
