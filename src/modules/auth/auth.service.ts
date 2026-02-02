@@ -472,11 +472,10 @@ export class AuthService {
         },
       });
 
-      await this.emailService.sendVerificationCode({
-        to: email,
-        code,
-        purpose: 'registration',
-      });
+      // Отправка письма в фоне — ответ клиенту сразу, без ожидания SMTP (избегаем 504)
+      this.emailService
+        .sendVerificationCode({ to: email, code, purpose: 'registration' })
+        .catch((err) => this.logger.error('Background email send failed', err));
 
       return { message: 'ok', email };
     } catch (err) {
