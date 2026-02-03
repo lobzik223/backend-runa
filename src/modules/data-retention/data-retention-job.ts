@@ -68,5 +68,32 @@ export class DataRetentionJob {
       this.logger.error(`[Retention] Cleanup failed: ${e?.message ?? String(e)}`);
     }
   }
+
+  /**
+   * Безвозвратное удаление аккаунтов, у которых истёк срок заморозки (30 дней).
+   * Запуск ежедневно в 04:00.
+   */
+  @Cron('0 4 * * *')
+  async deleteScheduledAccounts() {
+    const now = new Date();
+    const usersToDelete = await this.prisma.user.findMany({
+      where: {
+        scheduledDeleteAt: { lte: now },
+        deletionRequestedAt: { not: null },
+      },
+      select: { id: true, email: true },
+    });
+    if (usersToDelete.length === 0) return;
+
+    this.logger.log(`[AccountDeletion] Permanently deleting ${usersToDelete.length} account(s)`);
+    for (const u of usersToDelete) {
+      try {
+        await this.prisma.user.delete({ where: { id: u.id } });
+        this.logger.log(`[AccountDeletion] Deleted user id=${u.id} email=${u.email ?? '(no email)'}`);
+      } catch (e: any) {
+        this.logger.error(`[AccountDeletion] Failed to delete user id=${u.id}: ${e?.message ?? String(e)}`);
+      }
+    }
+  }
 }
 

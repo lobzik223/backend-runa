@@ -435,7 +435,11 @@ export class AuthService {
       const email = this.normalizeEmail(input.email);
 
       const existing = await this.prisma.user.findUnique({ where: { email } });
-      if (existing) throw new ConflictException('Email уже зарегистрирован');
+      if (existing) {
+        throw new ConflictException(
+          'Этот email уже зарегистрирован. Войдите под ним (пароль или кнопка «Войти через Google»).',
+        );
+      }
 
       const since = new Date(Date.now() - EMAIL_RESEND_COOLDOWN_MS);
       const recent = await this.prisma.emailVerificationCode.count({
@@ -525,6 +529,13 @@ export class AuthService {
       where: { id: record.id },
       data: { consumedAt: new Date() },
     });
+
+    const existingUser = await this.prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      throw new ConflictException(
+        'Этот email уже зарегистрирован. Войдите под ним (пароль или кнопка «Войти через Google»).',
+      );
+    }
 
     const user = await this.prisma.user.create({
       data: {
@@ -660,7 +671,16 @@ export class AuthService {
     const email = this.normalizeEmail(input.email);
     const user = await this.prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, name: true, passwordHash: true, createdAt: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        passwordHash: true,
+        createdAt: true,
+        deletionRequestedAt: true,
+        scheduledDeleteAt: true,
+        restoreUntil: true,
+      },
     });
 
     if (!user) throw new UnauthorizedException('Неверный email или пароль');
@@ -668,6 +688,20 @@ export class AuthService {
 
     const ok = await argon2.verify(user.passwordHash, input.password);
     if (!ok) throw new UnauthorizedException('Неверный email или пароль');
+
+    const now = new Date();
+    if (user.deletionRequestedAt && user.scheduledDeleteAt && user.scheduledDeleteAt.getTime() > now.getTime()) {
+      const restoreUntil = user.restoreUntil ? user.restoreUntil.getTime() : 0;
+      const daysLeftRestore = Math.max(0, Math.ceil((restoreUntil - now.getTime()) / (24 * 60 * 60 * 1000)));
+      const daysLeftDelete = Math.ceil((user.scheduledDeleteAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+      return {
+        message: 'account_scheduled_for_deletion',
+        accountScheduledForDeletion: true,
+        email: user.email,
+        daysLeftRestore,
+        daysLeftDelete,
+      } as any;
+    }
 
     const sessionId = randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
@@ -693,7 +727,10 @@ export class AuthService {
     };
   }
 
-  /** Вход/регистрация через Google: проверка id_token, поиск или создание пользователя, выдача JWT. */
+  /**
+   * Вход или «регистрация» через Google по id_token.
+   * Один аккаунт на один email: если пользователь уже есть (создан по почте+пароль или ранее через Google) — всегда вход в этот же аккаунт; иначе создаётся новый.
+   */
   async loginWithGoogle(input: { idToken: string; ip?: string; userAgent?: string }) {
     const res = await fetch(
       `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(input.idToken)}`,
@@ -712,15 +749,45 @@ export class AuthService {
 
     let user = await this.prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, name: true, createdAt: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        deletionRequestedAt: true,
+        scheduledDeleteAt: true,
+        restoreUntil: true,
+      },
     });
 
     if (!user) {
       user = await this.prisma.user.create({
         data: { email, name: safeName, passwordHash: null },
-        select: { id: true, email: true, name: true, createdAt: true },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          createdAt: true,
+          deletionRequestedAt: true,
+          scheduledDeleteAt: true,
+          restoreUntil: true,
+        },
       });
       await this.ensureUserReferralCode(user.id);
+    }
+
+    const now = new Date();
+    if (user.deletionRequestedAt && user.scheduledDeleteAt && user.scheduledDeleteAt.getTime() > now.getTime()) {
+      const restoreUntil = user.restoreUntil ? user.restoreUntil.getTime() : 0;
+      const daysLeftRestore = Math.max(0, Math.ceil((restoreUntil - now.getTime()) / (24 * 60 * 60 * 1000)));
+      const daysLeftDelete = Math.ceil((user.scheduledDeleteAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+      return {
+        message: 'account_scheduled_for_deletion',
+        accountScheduledForDeletion: true,
+        email: user.email,
+        daysLeftRestore,
+        daysLeftDelete,
+      } as any;
     }
 
     const sessionId = randomUUID();
@@ -845,6 +912,189 @@ export class AuthService {
     } catch {
       // ignore not-found
     }
+    return { message: 'ok' };
+  }
+
+  /** Запрос кода на почту для подтверждения удаления аккаунта (только для авторизованного пользователя). locale — язык письма (ru/en). */
+  async requestAccountDeletion(userId: number, locale?: 'ru' | 'en') {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, deletionRequestedAt: true },
+    });
+    if (!user) throw new UnauthorizedException('Пользователь не найден');
+    if (!user.email) throw new BadRequestException('У аккаунта нет привязанной почты для отправки кода');
+    if (user.deletionRequestedAt) throw new BadRequestException('Удаление уже запланировано. Восстановление возможно в течение 14 дней.');
+
+    const email = this.normalizeEmail(user.email);
+    const since = new Date(Date.now() - EMAIL_RESEND_COOLDOWN_MS);
+    const recent = await this.prisma.emailVerificationCode.count({
+      where: { email, purpose: 'account_deletion', createdAt: { gte: since } },
+    });
+    if (recent > 0) {
+      throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
+    }
+
+    const code = this.generateOtpCode();
+    const codeHash = await this.hashOtp(code);
+    const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS);
+    await this.prisma.emailVerificationCode.create({
+      data: { email, codeHash, purpose: 'account_deletion', expiresAt },
+    });
+
+    try {
+      await this.emailService.sendVerificationCode({
+        to: email,
+        code,
+        purpose: 'account_deletion',
+        locale: locale ?? 'ru',
+      });
+    } catch (err) {
+      this.logger.error(`requestAccountDeletion: failed to send email to ${email}`, err);
+      throw new InternalServerErrorException(
+        'Не удалось отправить письмо. Попробуйте позже.',
+      );
+    }
+    return { message: 'ok', email };
+  }
+
+  /** Подтверждение удаления аккаунта по коду из почты. Аккаунт переводится в заморозку на 30 дней; восстановление возможно 14 дней. */
+  async confirmAccountDeletion(userId: number, code: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, deletionRequestedAt: true },
+    });
+    if (!user) throw new UnauthorizedException('Пользователь не найден');
+    if (!user.email) throw new BadRequestException('Нет привязанной почты');
+    if (user.deletionRequestedAt) throw new BadRequestException('Удаление уже запланировано');
+
+    const email = this.normalizeEmail(user.email);
+    const record = await this.prisma.emailVerificationCode.findFirst({
+      where: {
+        email,
+        purpose: 'account_deletion',
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!record) throw new UnauthorizedException('Неверный или истёкший код');
+    if (record.attempts >= 5) throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
+
+    const ok = await this.verifyOtpHash(record.codeHash, code.trim());
+    if (!ok) {
+      await this.prisma.emailVerificationCode.update({
+        where: { id: record.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException('Неверный код');
+    }
+    await this.prisma.emailVerificationCode.update({
+      where: { id: record.id },
+      data: { consumedAt: new Date() },
+    });
+
+    const now = new Date();
+    const scheduledDeleteAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const restoreUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        deletionRequestedAt: now,
+        scheduledDeleteAt,
+        restoreUntil,
+      },
+    });
+    await this.prisma.refreshSession.deleteMany({ where: { userId } });
+    return { message: 'ok', scheduledDeleteAt: scheduledDeleteAt.toISOString(), restoreUntil: restoreUntil.toISOString() };
+  }
+
+  /** Запрос кода на почту для восстановления аккаунта (аккаунт в заморозке, в течение 14 дней). Без авторизации. locale — язык письма. */
+  async requestRestoreAccount(input: { email: string; locale?: 'ru' | 'en' }) {
+    const email = this.normalizeEmail(input.email);
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, deletionRequestedAt: true, restoreUntil: true, scheduledDeleteAt: true },
+    });
+    if (!user || !user.deletionRequestedAt) {
+      return { message: 'ok', email };
+    }
+    const now = new Date();
+    if (user.restoreUntil && user.restoreUntil.getTime() < now.getTime()) {
+      throw new BadRequestException('Срок восстановления (14 дней) истёк. Аккаунт будет удалён безвозвратно.');
+    }
+
+    const since = new Date(Date.now() - EMAIL_RESEND_COOLDOWN_MS);
+    const recent = await this.prisma.emailVerificationCode.count({
+      where: { email, purpose: 'account_restore', createdAt: { gte: since } },
+    });
+    if (recent > 0) {
+      throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
+    }
+
+    const code = this.generateOtpCode();
+    const codeHash = await this.hashOtp(code);
+    const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS);
+    await this.prisma.emailVerificationCode.create({
+      data: { email, codeHash, purpose: 'account_restore', expiresAt },
+    });
+    try {
+      await this.emailService.sendVerificationCode({
+        to: email,
+        code,
+        purpose: 'account_restore',
+        locale: input.locale ?? 'ru',
+      });
+    } catch (err) {
+      this.logger.error(`requestRestoreAccount: failed to send email to ${email}`, err);
+      throw new InternalServerErrorException('Не удалось отправить письмо. Попробуйте позже.');
+    }
+    return { message: 'ok', email };
+  }
+
+  /** Подтверждение восстановления аккаунта по коду. Снимает заморозку удаления. */
+  async confirmRestoreAccount(input: { email: string; code: string }) {
+    const email = this.normalizeEmail(input.email);
+    const code = input.code.trim();
+
+    const record = await this.prisma.emailVerificationCode.findFirst({
+      where: {
+        email,
+        purpose: 'account_restore',
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!record) throw new UnauthorizedException('Неверный или истёкший код');
+    if (record.attempts >= 5) throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
+
+    const ok = await this.verifyOtpHash(record.codeHash, code);
+    if (!ok) {
+      await this.prisma.emailVerificationCode.update({
+        where: { id: record.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new UnauthorizedException('Неверный код');
+    }
+    await this.prisma.emailVerificationCode.update({
+      where: { id: record.id },
+      data: { consumedAt: new Date() },
+    });
+
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, deletionRequestedAt: true },
+    });
+    if (!user || !user.deletionRequestedAt) throw new BadRequestException('Аккаунт не в режиме удаления');
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        deletionRequestedAt: null,
+        scheduledDeleteAt: null,
+        restoreUntil: null,
+      },
+    });
     return { message: 'ok' };
   }
 

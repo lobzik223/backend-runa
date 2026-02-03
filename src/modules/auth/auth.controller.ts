@@ -8,8 +8,12 @@ import { OtpRequestDto } from './dto/otp-request.dto';
 import { OtpVerifyDto } from './dto/otp-verify.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ConfirmAccountDeletionDto } from './dto/confirm-account-deletion.dto';
+import { RequestAccountDeletionDto } from './dto/request-account-deletion.dto';
+import { ConfirmRestoreAccountDto } from './dto/confirm-restore-account.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { RequestRegistrationCodeDto } from './dto/request-registration-code.dto';
+import { RequestRestoreAccountDto } from './dto/request-restore-account.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { VerifyRegistrationCodeDto } from './dto/verify-registration-code.dto';
@@ -154,6 +158,38 @@ export class AuthController {
   @SkipThrottle()
   logout(@Body() _dto: RefreshDto, @Req() req: Request & { user: JwtRefreshPayload }) {
     return this.auth.logout(req.user.sub, req.user.jti);
+  }
+
+  @Post('request-account-deletion')
+  @UseGuards(JwtAccessGuard)
+  @Throttle({ default: { limit: 3, ttl: 60 } })
+  requestAccountDeletion(
+    @Req() req: Request & { user: JwtAccessPayload },
+    @Body() dto?: RequestAccountDeletionDto,
+  ) {
+    return this.auth.requestAccountDeletion(req.user.sub, dto?.locale);
+  }
+
+  @Post('confirm-account-deletion')
+  @UseGuards(JwtAccessGuard)
+  @Throttle({ default: { limit: 10, ttl: 60 } })
+  confirmAccountDeletion(
+    @Req() req: Request & { user: JwtAccessPayload },
+    @Body() dto: ConfirmAccountDeletionDto,
+  ) {
+    return this.auth.confirmAccountDeletion(req.user.sub, dto.code);
+  }
+
+  @Post('request-restore-account')
+  @Throttle({ default: { limit: 5, ttl: 60 } })
+  requestRestoreAccount(@Body() dto: RequestRestoreAccountDto) {
+    return this.auth.requestRestoreAccount({ email: dto.email, locale: dto.locale });
+  }
+
+  @Post('confirm-restore-account')
+  @Throttle({ default: { limit: 10, ttl: 60 } })
+  confirmRestoreAccount(@Body() dto: ConfirmRestoreAccountDto) {
+    return this.auth.confirmRestoreAccount({ email: dto.email, code: dto.code });
   }
 }
 

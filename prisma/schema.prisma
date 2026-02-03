@@ -100,6 +100,11 @@ model User {
   // Инвестиции: начальный баланс счёта (по умолчанию 100 000 ₽), пользователь может менять
   investmentInitialBalance Decimal @default(100000) @db.Decimal(18, 2)
 
+  // Удаление аккаунта: заморозка 30 дней, восстановление возможно в первые 14 дней
+  deletionRequestedAt DateTime?
+  scheduledDeleteAt   DateTime?
+  restoreUntil        DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   nameUpdatedAt DateTime @default(now())
