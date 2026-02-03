@@ -19,11 +19,21 @@ function getRssSources(lang: MarketNewsLang): { url: string; source: string }[] 
   const base: { url: string; source: string }[] = [
     { url: 'https://www.moex.com/export/news.aspx?cat=200', source: moexSource },
     { url: 'https://www.moex.com/export/news.aspx?cat=201', source: moexSource },
-    { url: 'https://www.cbr.ru/rss/daily.asp', source: cbrSource },
   ];
-  // Для русского — добавляем ТАСС (контент всегда на русском)
   if (lang === 'ru') {
+    // Русский: ТАСС + ЦБ РФ (новости, пресс-релизы, курсы валют) — всё на русском
     base.unshift({ url: 'https://tass.ru/rss/v2.xml', source: 'ТАСС' });
+    base.push(
+      { url: 'https://www.cbr.ru/rss/RssNews', source: cbrSource },
+      { url: 'https://www.cbr.ru/rss/RssPress', source: cbrSource },
+      { url: 'https://www.cbr.ru/rss/RssCurrency', source: cbrSource },
+    );
+  } else {
+    // Английский: ЦБ РФ (англоязычные ленты)
+    base.push(
+      { url: 'https://www.cbr.ru/rss/EngRssNews', source: cbrSource },
+      { url: 'https://www.cbr.ru/rss/EngRssPress', source: cbrSource },
+    );
   }
   return base;
 }
