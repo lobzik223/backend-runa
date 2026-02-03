@@ -13,7 +13,7 @@ export interface MarketNewsItem {
 
 type MarketNewsLang = 'ru' | 'en';
 
-/** Только экономические/финансовые источники: биржа, ЦБ. Без общественно-политических лент (ТАСС общая и т.п.). */
+/** Только экономические/финансовые источники: биржа, ЦБ. На RU и EN — и Мосбиржа, и ЦБ. */
 function getRssSources(lang: MarketNewsLang): { url: string; source: string }[] {
   const moexSource = lang === 'ru' ? 'Московская биржа' : 'Moscow Exchange';
   const cbrSource = lang === 'ru' ? 'ЦБ РФ' : 'Bank of Russia';
@@ -30,6 +30,7 @@ function getRssSources(lang: MarketNewsLang): { url: string; source: string }[] 
   } else {
     base.push(
       { url: 'https://www.cbr.ru/rss/EngRssNews', source: cbrSource },
+      { url: 'https://www.cbr.ru/rss/engeventrss', source: cbrSource },
       { url: 'https://www.cbr.ru/rss/EngRssPress', source: cbrSource },
     );
   }

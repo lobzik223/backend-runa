@@ -33,6 +33,7 @@ export class TransactionsService {
         ? {
             id: t.category.id,
             name: t.category.name,
+            iconKey: t.category.iconKey ?? (t.category as any).parent?.iconKey ?? null,
           }
         : t.category,
       paymentMethod: t.paymentMethod
@@ -102,7 +103,7 @@ export class TransactionsService {
           paymentMethodId: dto.paymentMethodId,
         },
         include: {
-          category: true,
+          category: { include: { parent: true } },
           paymentMethod: {
             include: {
               creditAccount: true,
@@ -178,7 +179,7 @@ export class TransactionsService {
       this.prisma.transaction.findMany({
         where,
         include: {
-          category: true,
+          category: { include: { parent: true } },
           paymentMethod: {
             include: {
               creditAccount: true,
@@ -209,7 +210,7 @@ export class TransactionsService {
     const transaction = await this.prisma.transaction.findUnique({
       where: { id },
       include: {
-        category: true,
+        category: { include: { parent: true } },
         paymentMethod: {
           include: {
             creditAccount: true,
