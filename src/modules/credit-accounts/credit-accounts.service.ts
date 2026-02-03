@@ -36,7 +36,10 @@ export class CreditAccountsService {
     }
 
     const currentBalance = dto.currentBalance || 0;
-    const nextPaymentAt = dto.nextPaymentAt ? new Date(dto.nextPaymentAt) : new Date();
+    const nextPaymentAt = this.resolveNextPaymentAt(
+      dto.nextPaymentAt,
+      dto.kind === 'CREDIT_CARD' ? dto.billingDay : dto.paymentDay,
+    );
 
     // Use transaction to create account and scheduled event atomically
     const result = await this.prisma.$transaction(async (tx) => {
@@ -271,5 +274,26 @@ export class CreditAccountsService {
         data: { currentBalance: newBalance },
       });
     });
+  }
+
+  /**
+   * Определяет дату следующего платежа: из DTO, по дню месяца (1–31) или сегодня.
+   */
+  private resolveNextPaymentAt(nextPaymentAtStr: string | undefined, dayOfMonth: number | undefined): Date {
+    if (nextPaymentAtStr) {
+      const d = new Date(nextPaymentAtStr);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+    if (dayOfMonth != null && dayOfMonth >= 1 && dayOfMonth <= 31) {
+      const now = new Date();
+      const maxDayThis = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const dayThis = Math.min(dayOfMonth, maxDayThis);
+      const thisMonth = new Date(now.getFullYear(), now.getMonth(), dayThis);
+      if (thisMonth >= now) return thisMonth;
+      const maxDayNext = new Date(now.getFullYear(), now.getMonth() + 2, 0).getDate();
+      const dayNext = Math.min(dayOfMonth, maxDayNext);
+      return new Date(now.getFullYear(), now.getMonth() + 1, dayNext);
+    }
+    return new Date();
   }
 }
