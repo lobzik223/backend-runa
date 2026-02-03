@@ -49,6 +49,8 @@ const envSchema = z
 
   // Dynamic config
   SUBSCRIPTION_SITE_URL: z.string().url().default('https://runafinance.online/premium'),
+  /** Ссылка на поддержку в Telegram (открывается при нажатии «Поддержка» в профиле). Можно менять без пересборки приложения. */
+  SUPPORT_TELEGRAM_URL: z.string().url().default('https://t.me/RUNASUPPORT04'),
 
   // SMTP (Timeweb или другой хостинг) — для кодов на почту (подтверждение регистрации, сброс пароля)
   SMTP_HOST: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),

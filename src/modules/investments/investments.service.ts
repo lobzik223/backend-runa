@@ -685,7 +685,7 @@ export class InvestmentsService {
       // ignore
     }
 
-    // Дневное изменение: цена закрытия предыдущего дня (как в Тинькофф)
+    // Дневное изменение: цена закрытия предыдущего торгового дня (как в Тинькофф)
     let change = 0;
     let changePercent = 0;
     try {
@@ -698,8 +698,11 @@ export class InvestmentsService {
           const today = new Date();
           const candles = await provider.getCandles(instrument.figi, yesterday, today, 'DAY');
           if (candles && candles.length > 0) {
-            const lastCandle = candles[candles.length - 1];
-            const prevClose = lastCandle?.close;
+            // Предыдущее закрытие = предпоследняя свеча (вчера), т.к. последняя может быть «сегодня»
+            const prevClose =
+              candles.length >= 2
+                ? (candles[candles.length - 2] as { close?: number })?.close
+                : (candles[candles.length - 1] as { close?: number })?.close;
             if (prevClose != null && prevClose > 0) {
               change = price - prevClose;
               changePercent = (change / prevClose) * 100;

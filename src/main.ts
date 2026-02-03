@@ -41,8 +41,8 @@ async function bootstrap() {
       const paymentsPath = `/${prefix}/payments`;
       // Иконки акций (SVG) — открыты для загрузки в приложении
       if (reqPath.startsWith('/assets/icons')) return next();
-      // GET /api/health — открыт для проверки доступности
-      if (reqPath === healthPath && req.method === 'GET') return next();
+      // GET /api/health и GET /api/health/config — открыты (проверка доступности и конфиг приложения)
+      if (reqPath.startsWith(healthPath) && req.method === 'GET') return next();
       // POST /api/health/maintenance — только с APP_KEY (включить/выключить режим «Ведутся работы»)
       if (reqPath === `${healthPath}/maintenance` && req.method === 'POST') {
         const key = req.headers['x-runa-app-key'];

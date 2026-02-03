@@ -16,11 +16,16 @@ type MarketNewsLang = 'ru' | 'en';
 function getRssSources(lang: MarketNewsLang): { url: string; source: string }[] {
   const moexSource = lang === 'ru' ? 'Московская биржа' : 'Moscow Exchange';
   const cbrSource = lang === 'ru' ? 'ЦБ РФ' : 'Bank of Russia';
-  return [
+  const base: { url: string; source: string }[] = [
     { url: 'https://www.moex.com/export/news.aspx?cat=200', source: moexSource },
     { url: 'https://www.moex.com/export/news.aspx?cat=201', source: moexSource },
     { url: 'https://www.cbr.ru/rss/daily.asp', source: cbrSource },
   ];
+  // Для русского — добавляем ТАСС (контент всегда на русском)
+  if (lang === 'ru') {
+    base.unshift({ url: 'https://tass.ru/rss/v2.xml', source: 'ТАСС' });
+  }
+  return base;
 }
 
 const RSS_USER_AGENT =
@@ -51,6 +56,9 @@ export class MarketNewsService {
     } catch (e) {
       this.logger.warn('[MarketNews] RSS fetch failed, trying DB:', (e as Error).message);
     }
+
+    // Для русского не подставляем БД (там может быть английский контент)
+    if (lang === 'ru') return [];
 
     try {
       const dbNews = await (this.prisma as any).marketNews.findMany({
