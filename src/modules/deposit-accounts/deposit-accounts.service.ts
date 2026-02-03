@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EntitlementsService } from '../subscriptions/entitlements.service';
 import { CreateDepositAccountDto } from './dto/create-deposit-account.dto';
 import { UpdateDepositAccountDto } from './dto/update-deposit-account.dto';
 import { ScheduledEventsService } from '../scheduled-events/scheduled-events.service';
 import { InterestCalculatorService } from '../scheduled-events/interest-calculator.service';
+
+const FREE_DEPOSITS_LIMIT = 2;
+const PREMIUM_DEPOSITS_LIMIT = 100;
 
 @Injectable()
 export class DepositAccountsService {
@@ -11,9 +15,19 @@ export class DepositAccountsService {
     private prisma: PrismaService,
     private scheduledEventsService: ScheduledEventsService,
     private interestCalculator: InterestCalculatorService,
+    private entitlements: EntitlementsService,
   ) {}
 
   async create(userId: number, dto: CreateDepositAccountDto) {
+    const isPremium = await this.entitlements.isPremium(userId);
+    const limit = isPremium ? PREMIUM_DEPOSITS_LIMIT : FREE_DEPOSITS_LIMIT;
+    const count = await this.prisma.depositAccount.count({ where: { userId } });
+    if (count >= limit) {
+      throw new ForbiddenException(
+        isPremium ? 'DEPOSITS_LIMIT_REACHED' : 'DEPOSITS_FREE_LIMIT_REACHED',
+      );
+    }
+
     const payoutSchedule = dto.payoutSchedule || 'MONTHLY';
     const nextPayoutAt = dto.nextPayoutAt ? new Date(dto.nextPayoutAt) : new Date();
 

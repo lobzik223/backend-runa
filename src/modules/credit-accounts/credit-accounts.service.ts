@@ -1,9 +1,13 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EntitlementsService } from '../subscriptions/entitlements.service';
 import { CreateCreditAccountDto } from './dto/create-credit-account.dto';
 import { UpdateCreditAccountDto } from './dto/update-credit-account.dto';
 import { ScheduledEventsService } from '../scheduled-events/scheduled-events.service';
 import { InterestCalculatorService } from '../scheduled-events/interest-calculator.service';
+
+const FREE_CREDITS_LIMIT = 2;
+const PREMIUM_CREDITS_LIMIT = 100;
 
 @Injectable()
 export class CreditAccountsService {
@@ -11,9 +15,19 @@ export class CreditAccountsService {
     private prisma: PrismaService,
     private scheduledEventsService: ScheduledEventsService,
     private interestCalculator: InterestCalculatorService,
+    private entitlements: EntitlementsService,
   ) {}
 
   async create(userId: number, dto: CreateCreditAccountDto) {
+    const isPremium = await this.entitlements.isPremium(userId);
+    const limit = isPremium ? PREMIUM_CREDITS_LIMIT : FREE_CREDITS_LIMIT;
+    const count = await this.prisma.creditAccount.count({ where: { userId } });
+    if (count >= limit) {
+      throw new ForbiddenException(
+        isPremium ? 'CREDITS_LIMIT_REACHED' : 'CREDITS_FREE_LIMIT_REACHED',
+      );
+    }
+
     // Validate credit_limit >= currentBalance for credit cards
     if (dto.kind === 'CREDIT_CARD' && dto.creditLimit !== undefined && dto.currentBalance !== undefined) {
       if (dto.currentBalance > dto.creditLimit) {

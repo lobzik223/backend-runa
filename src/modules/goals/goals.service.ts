@@ -1,12 +1,19 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EntitlementsService } from '../subscriptions/entitlements.service';
 import { CreateGoalDto } from './dto/create-goal.dto';
 import { UpdateGoalDto } from './dto/update-goal.dto';
 import { AddGoalContributionDto } from './dto/add-goal-contribution.dto';
 
+const FREE_GOALS_LIMIT = 2;
+const PREMIUM_GOALS_LIMIT = 100;
+
 @Injectable()
 export class GoalsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private entitlements: EntitlementsService,
+  ) {}
 
   private serializeGoal(goal: any) {
     const targetAmount = Number(goal.targetAmount);
@@ -38,6 +45,19 @@ export class GoalsService {
   }
 
   async create(userId: number, dto: CreateGoalDto) {
+    const isPremium = await this.entitlements.isPremium(userId);
+    const limit = isPremium ? PREMIUM_GOALS_LIMIT : FREE_GOALS_LIMIT;
+    const activeCount = await this.prisma.goal.count({
+      where: { userId, status: 'ACTIVE' },
+    });
+    if (activeCount >= limit) {
+      throw new ForbiddenException(
+        isPremium
+          ? 'GOALS_LIMIT_REACHED'
+          : 'GOALS_FREE_LIMIT_REACHED',
+      );
+    }
+
     const goal = await this.prisma.goal.create({
       data: {
         userId,
