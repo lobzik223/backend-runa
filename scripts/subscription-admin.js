@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
  * Управление Premium и просмотр статуса пользователя (по email или id).
- * Требуется вход в админ-аккаунт (кроме status — можно без админа для быстрой проверки, или с админом).
  *
  * Команды:
  *   grant <email|id> <дней 1-360>   — выдать дни (добавляются к текущему сроку, если премиум уже есть)
@@ -22,7 +21,6 @@
 
 require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
-const { requireAdminLogin } = require('./lib/admin-auth');
 
 const prisma = new PrismaClient();
 
@@ -227,8 +225,6 @@ async function main() {
     await prisma.$disconnect();
     return;
   }
-
-  await requireAdminLogin(prisma);
 
   if (cmd === 'grant') {
     await grant(identifier, daysArg);
