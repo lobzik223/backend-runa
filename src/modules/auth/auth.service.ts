@@ -238,21 +238,12 @@ export class AuthService {
       return { applied: false, referralError: 'invalid' };
     }
 
-    // Invitee: 7 дней премиума (premiumUntil), чтобы isPremium() и приложение показывали доступ
+    // Invitee: 7 дней премиума (premiumUntil)
     await this.entitlementsService.grantPremium(params.newUserId, 7);
 
-    // Inviter: 7 дней премиума только если у него нет активного премиума/триала
-    const inviter = await this.prisma.user.findUnique({
-      where: { id: code.userId },
-      select: { trialUntil: true, premiumUntil: true },
-    });
-    const now = new Date();
-    const inviterHasAccess =
-      (inviter?.premiumUntil != null && now < inviter.premiumUntil) ||
-      (inviter?.trialUntil != null && now < inviter.trialUntil);
-    if (!inviterHasAccess) {
-      await this.entitlementsService.grantPremium(code.userId, 7);
-    }
+    // Inviter: всегда начисляем 7 дней премиума при успешном использовании кода (если уже есть премиум — продлеваем)
+    await this.entitlementsService.grantPremium(code.userId, 7);
+
     return { applied: true };
   }
 
