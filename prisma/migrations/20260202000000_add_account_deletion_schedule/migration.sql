@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "deletionRequestedAt" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "scheduledDeleteAt" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "restoreUntil" TIMESTAMP(3);
