@@ -55,8 +55,8 @@ RUN npm install -g prisma@^6.2.0
 # Копирование собранного приложения из builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-# Скрипт переключения режима «Ведутся работы» (maintenance on/off)
-COPY scripts/maintenance.js ./scripts/maintenance.js
+# Скрипты администрирования (maintenance, админы, подписки, удаление пользователей)
+COPY scripts/ ./scripts/
 
 # Копирование entrypoint скрипта
 COPY docker-entrypoint.sh /usr/local/bin/
