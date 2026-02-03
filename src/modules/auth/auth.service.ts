@@ -15,6 +15,7 @@ import { env } from '../../config/env.validation';
 import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SmsService } from '../sms/sms.service';
+import { EntitlementsService } from '../subscriptions/entitlements.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import type { JwtAccessPayload, JwtRefreshPayload } from './types/jwt-payload';
 
@@ -35,6 +36,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly sms: SmsService,
     private readonly emailService: EmailService,
+    private readonly entitlementsService: EntitlementsService,
   ) {}
 
   private normalizeEmail(email: string): string {
@@ -147,20 +149,21 @@ export class AuthService {
   }
 
   /**
-   * Applies referral bonus if code is valid. Returns true if both inviter and invitee got 7 days.
+   * Applies referral bonus if code is valid.
+   * Один промокод = одно использование. Выдаём 7 дней premiumUntil (премиум), не trial.
    */
   private async applyReferralIfValid(params: {
     newUserId: number;
     referralCode?: string | null;
     deviceId?: string;
     ip?: string;
-  }): Promise<boolean> {
+  }): Promise<{ applied: boolean; referralError?: 'already_used' | 'invalid' }> {
     const referralCode = this.normalizeReferralCode(params.referralCode ?? undefined);
 
-    // Default: 3 days for new user (even if no/invalid code)
+    // Default: 3 days trial for new user (even if no/invalid code)
     if (!referralCode) {
       await this.grantTrialDays(params.newUserId, 3);
-      return false;
+      return { applied: false, referralError: 'invalid' };
     }
 
     const code = await this.prisma.referralCode.findUnique({
@@ -170,27 +173,34 @@ export class AuthService {
 
     if (!code) {
       await this.grantTrialDays(params.newUserId, 3);
-      return false;
+      return { applied: false, referralError: 'invalid' };
+    }
+
+    // Один промокод = одно использование: если этот код уже кем-то использован — отказ
+    const codeAlreadyUsed = await this.prisma.referralRedemption.findFirst({
+      where: { codeId: code.id },
+    });
+    if (codeAlreadyUsed) {
+      await this.grantTrialDays(params.newUserId, 3);
+      return { applied: false, referralError: 'already_used' };
     }
 
     // prevent self-referral
     if (code.userId === params.newUserId) {
       await this.grantTrialDays(params.newUserId, 3);
-      return false;
+      return { applied: false, referralError: 'invalid' };
     }
 
-    // One-time use: each user can be invitee only once ever (DB unique on inviteeUserId).
+    // Each user can be invitee only once ever (DB unique on inviteeUserId)
     const existingRedemption = await this.prisma.referralRedemption.findUnique({
       where: { inviteeUserId: params.newUserId },
     });
     if (existingRedemption) {
       await this.grantTrialDays(params.newUserId, 3);
-      return false;
+      return { applied: false, referralError: 'invalid' };
     }
 
-    // Abuse heuristics:
-    // - same device already linked to inviter user
-    // - too many redemptions from same IP in last 24h
+    // Abuse heuristics
     if (params.deviceId) {
       const inviterDevice = await this.prisma.device.findFirst({
         where: { deviceId: params.deviceId, userId: code.userId },
@@ -198,7 +208,7 @@ export class AuthService {
       });
       if (inviterDevice) {
         await this.grantTrialDays(params.newUserId, 3);
-        return false;
+        return { applied: false, referralError: 'invalid' };
       }
     }
 
@@ -209,7 +219,7 @@ export class AuthService {
       });
       if (ipCount >= 3) {
         await this.grantTrialDays(params.newUserId, 3);
-        return false;
+        return { applied: false, referralError: 'invalid' };
       }
     }
 
@@ -224,15 +234,14 @@ export class AuthService {
         },
       });
     } catch {
-      // If redemption fails (e.g. duplicate invitee), fallback to default 3 days
       await this.grantTrialDays(params.newUserId, 3);
-      return false;
+      return { applied: false, referralError: 'invalid' };
     }
 
-    // Invitee always gets 7 days
-    await this.grantTrialDays(params.newUserId, 7);
+    // Invitee: 7 дней премиума (premiumUntil), чтобы isPremium() и приложение показывали доступ
+    await this.entitlementsService.grantPremium(params.newUserId, 7);
 
-    // Inviter gets 7 days only if they do NOT have active premium or trial
+    // Inviter: 7 дней премиума только если у него нет активного премиума/триала
     const inviter = await this.prisma.user.findUnique({
       where: { id: code.userId },
       select: { trialUntil: true, premiumUntil: true },
@@ -242,9 +251,9 @@ export class AuthService {
       (inviter?.premiumUntil != null && now < inviter.premiumUntil) ||
       (inviter?.trialUntil != null && now < inviter.trialUntil);
     if (!inviterHasAccess) {
-      await this.grantTrialDays(code.userId, 7);
+      await this.entitlementsService.grantPremium(code.userId, 7);
     }
-    return true;
+    return { applied: true };
   }
 
   async requestOtp(input: { phoneE164: string; deviceId?: string; ip?: string; userAgent?: string }) {
@@ -409,16 +418,23 @@ export class AuthService {
 
     await this.ensureDeviceSeen({ deviceId: input.deviceId, userId: user.id, ip: input.ip, userAgent: input.userAgent });
     await this.ensureUserReferralCode(user.id);
-    const referralApplied = await this.applyReferralIfValid({ newUserId: user.id, referralCode: input.referralCode, deviceId: input.deviceId, ip: input.ip });
+    const referralResult = await this.applyReferralIfValid({ newUserId: user.id, referralCode: input.referralCode, deviceId: input.deviceId, ip: input.ip });
 
     const tokens = await this.signTokens(user, sessionId);
 
+    // Вернуть пользователя с актуальными trialUntil/premiumUntil после начисления реферала
+    const userWithEntitlements = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, email: true, name: true, createdAt: true, trialUntil: true, premiumUntil: true },
+    });
+
     return {
       message: 'ok',
-      user,
+      user: userWithEntitlements ?? user,
       token: tokens.accessToken, // keep compatibility with current mobile client
       refreshToken: tokens.refreshToken,
-      referralApplied,
+      referralApplied: referralResult.applied,
+      referralError: referralResult.referralError,
     };
   }
 
@@ -563,7 +579,7 @@ export class AuthService {
 
     await this.ensureDeviceSeen({ deviceId: input.deviceId, userId: user.id, ip: input.ip, userAgent: input.userAgent });
     await this.ensureUserReferralCode(user.id);
-    const referralApplied = await this.applyReferralIfValid({
+    const referralResult = await this.applyReferralIfValid({
       newUserId: user.id,
       referralCode: payload.referralCode ?? undefined,
       deviceId: input.deviceId,
@@ -572,12 +588,19 @@ export class AuthService {
 
     const tokens = await this.signTokens(user, sessionId);
 
+    // Вернуть пользователя с актуальными trialUntil/premiumUntil после начисления реферала
+    const userWithEntitlements = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, email: true, name: true, createdAt: true, trialUntil: true, premiumUntil: true },
+    });
+
     return {
       message: 'ok',
-      user,
+      user: userWithEntitlements ?? user,
       token: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      referralApplied,
+      referralApplied: referralResult.applied,
+      referralError: referralResult.referralError,
     };
   }
 

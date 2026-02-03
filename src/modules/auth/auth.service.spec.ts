@@ -19,6 +19,7 @@ function createPrismaMock() {
     },
     referralRedemption: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn(),
       count: jest.fn(),
     },
@@ -54,11 +55,16 @@ function createEmailMock() {
   return { sendVerificationCode: jest.fn(async () => undefined) };
 }
 
+function createEntitlementsMock() {
+  return { grantPremium: jest.fn(async () => undefined) };
+}
+
 describe('AuthService (referral + OTP)', () => {
-  test('email register: valid referral => both get 7 days trial', async () => {
+  test('email register: valid referral => both get 7 days premium', async () => {
     const prisma = createPrismaMock();
     const jwt = createJwtMock();
     const sms = createSmsMock();
+    const entitlements = createEntitlementsMock();
 
     prisma.user.findUnique.mockResolvedValueOnce(null);
     prisma.user.create.mockResolvedValueOnce({ id: 10, email: 'a@b.com', name: 'A', createdAt: new Date() });
@@ -68,13 +74,16 @@ describe('AuthService (referral + OTP)', () => {
       .mockResolvedValueOnce({ id: 'rc1', userId: 1 }); // lookup referral code by code
 
     prisma.referralCode.create.mockResolvedValueOnce({ id: 'x', userId: 10, code: 'RUNA1234' });
+    prisma.referralRedemption.findFirst.mockResolvedValueOnce(null); // код ещё не использован
+    prisma.referralRedemption.findUnique.mockResolvedValueOnce(null); // invitee ещё не использовал промокод
     prisma.device.findFirst.mockResolvedValueOnce(null);
     prisma.referralRedemption.count.mockResolvedValueOnce(0);
     prisma.referralRedemption.create.mockResolvedValueOnce({ id: 'rr1' });
-    prisma.subscription.findUnique.mockResolvedValue(null);
-    prisma.subscription.upsert.mockResolvedValue({ id: 's' });
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ trialUntil: null, premiumUntil: null }) // inviter без доступа
+      .mockResolvedValueOnce({ id: 10, email: 'a@b.com', name: 'A', createdAt: new Date(), trialUntil: null, premiumUntil: new Date() }); // ответ с premiumUntil
 
-    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any);
+    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any, entitlements as any);
 
     const res = await svc.register({
       name: 'A',
@@ -87,9 +96,9 @@ describe('AuthService (referral + OTP)', () => {
     });
 
     expect(res.token).toBeDefined();
-    // new user trial + inviter trial => upsert called twice
-    expect(prisma.subscription.upsert).toHaveBeenCalledTimes(2);
-    // redemption recorded
+    expect(res.referralApplied).toBe(true);
+    // invitee 7 дней + inviter 7 дней
+    expect(entitlements.grantPremium).toHaveBeenCalledTimes(2);
     expect(prisma.referralRedemption.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ inviterUserId: 1, inviteeUserId: 10 }),
@@ -101,6 +110,7 @@ describe('AuthService (referral + OTP)', () => {
     const prisma = createPrismaMock();
     const jwt = createJwtMock();
     const sms = createSmsMock();
+    const entitlements = createEntitlementsMock();
 
     prisma.user.findUnique.mockResolvedValueOnce(null);
     prisma.user.create.mockResolvedValueOnce({ id: 11, email: 'c@d.com', name: 'C', createdAt: new Date() });
@@ -110,11 +120,9 @@ describe('AuthService (referral + OTP)', () => {
       .mockResolvedValueOnce(null); // referral code lookup fails
 
     prisma.referralCode.create.mockResolvedValueOnce({ id: 'y', userId: 11, code: 'RUNA5678' });
-    prisma.subscription.findUnique.mockResolvedValue(null);
-    prisma.subscription.upsert.mockResolvedValue({ id: 's' });
 
-    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any);
-    await svc.register({
+    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any, entitlements as any);
+    const res = await svc.register({
       name: 'C',
       email: 'c@d.com',
       password: 'password123',
@@ -122,9 +130,12 @@ describe('AuthService (referral + OTP)', () => {
       ip: '2.2.2.2',
     });
 
-    expect(prisma.subscription.upsert).toHaveBeenCalledTimes(1);
-    const call = prisma.subscription.upsert.mock.calls[0][0];
-    expect(call.create.productId).toBe('TRIAL_3D');
+    expect(res.referralApplied).toBe(false);
+    expect(res.referralError).toBe('invalid');
+    expect(entitlements.grantPremium).not.toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 11 }, data: expect.objectContaining({ trialUntil: expect.any(Date) }) }),
+    );
   });
 
   test('otp request sends sms and stores hashed otp', async () => {
@@ -135,7 +146,7 @@ describe('AuthService (referral + OTP)', () => {
     prisma.phoneOtp.count.mockResolvedValueOnce(0);
     prisma.phoneOtp.create.mockResolvedValueOnce({ id: 'otp1' });
 
-    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any);
+    const svc = new AuthService(prisma as any, jwt as any, sms as any, createEmailMock() as any, createEntitlementsMock() as any);
     const res = await svc.requestOtp({ phoneE164: '+79001234567', deviceId: 'device-1', ip: '3.3.3.3' });
 
     expect(res.message).toBe('ok');
