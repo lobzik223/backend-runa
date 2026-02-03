@@ -484,7 +484,10 @@ export class AuthService {
       return { message: 'ok', email };
     } catch (err) {
       if (err instanceof HttpException) throw err;
-      this.logger.error('requestRegistrationCode failed', err);
+      this.logger.error(
+        `requestRegistrationCode failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
       throw new ServiceUnavailableException('Сервис временно недоступен. Попробуйте позже.');
     }
   }
@@ -668,6 +671,19 @@ export class AuthService {
   }
 
   async login(input: { email: string; password: string; ip?: string; userAgent?: string }) {
+    try {
+      return await this.loginInternal(input);
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      this.logger.error(
+        `login failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      throw err;
+    }
+  }
+
+  private async loginInternal(input: { email: string; password: string; ip?: string; userAgent?: string }) {
     const email = this.normalizeEmail(input.email);
     const user = await this.prisma.user.findUnique({
       where: { email },
