@@ -21,6 +21,8 @@
     "db:delete-all-users": "node scripts/delete-all-users.js"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.11.0",
+    "@grpc/proto-loader": "^0.7.13",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
@@ -37,6 +39,7 @@
     "class-validator": "^0.14.1",
     "dayjs": "^1.11.19",
     "dotenv": "^16.4.7",
+    "googleapis": "^171.2.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.9.1",
     "nodemailer": "^6.9.16",
@@ -45,9 +48,7 @@
     "reflect-metadata": "^0.2.2",
     "rss-parser": "^3.13.0",
     "rxjs": "^7.8.1",
-    "zod": "^3.24.1",
-    "@grpc/grpc-js": "^1.11.0",
-    "@grpc/proto-loader": "^0.7.13"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",

@@ -1,4 +1,11 @@
-import { Injectable, Logger, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  UnauthorizedException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { google } from 'googleapis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EntitlementsService } from '../subscriptions/entitlements.service';
 
@@ -89,5 +96,136 @@ export class PaymentsService {
     if (key !== expectedKey) {
       throw new UnauthorizedException('Invalid Site API Key');
     }
+  }
+
+  /**
+   * Верификация чека Apple и активация подписки для пользователя.
+   * Требует APPLE_SHARED_SECRET в .env (App Store Connect → App → App-Specific Shared Secret).
+   */
+  async verifyAppleAndActivate(userId: number, receipt: string, originalTransactionId?: string): Promise<{ success: boolean }> {
+    const secret = process.env.APPLE_SHARED_SECRET;
+    if (!secret) {
+      this.logger.warn('[Apple IAP] APPLE_SHARED_SECRET not set');
+      throw new ServiceUnavailableException('Apple IAP not configured');
+    }
+    let body: { 'receipt-data': string; password: string } = {
+      'receipt-data': receipt,
+      password: secret,
+    };
+    const urls = [
+      'https://buy.itunes.apple.com/verifyReceipt',
+      'https://sandbox.itunes.apple.com/verifyReceipt',
+    ];
+    let lastStatus: number | undefined;
+    for (const url of urls) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json()) as {
+        status: number;
+        receipt?: { in_app?: Array<{ expires_date_ms?: string; original_transaction_id?: string; product_id?: string }> };
+        latest_receipt_info?: Array<{
+          expires_date_ms?: string;
+          original_transaction_id?: string;
+          product_id?: string;
+        }>;
+      };
+      lastStatus = data.status;
+      if (data.status === 0) {
+        const list = data.latest_receipt_info ?? data.receipt?.in_app ?? [];
+        let expiresMs = 0;
+        let productId: string | null = null;
+        let origTxId: string | null = null;
+        for (const item of list) {
+          const ms = item.expires_date_ms ? parseInt(item.expires_date_ms, 10) : 0;
+          if (ms > expiresMs) {
+            expiresMs = ms;
+            productId = item.product_id ?? null;
+            origTxId = item.original_transaction_id ?? null;
+          }
+        }
+        if (expiresMs > Date.now()) {
+          const currentPeriodEnd = new Date(expiresMs);
+          await this.prisma.subscription.upsert({
+            where: { userId },
+            create: {
+              userId,
+              status: 'ACTIVE',
+              store: 'APPLE',
+              productId: productId ?? undefined,
+              appleOriginalTransactionId: origTxId ?? originalTransactionId ?? undefined,
+              currentPeriodStart: new Date(),
+              currentPeriodEnd,
+            },
+            update: {
+              status: 'ACTIVE',
+              productId: productId ?? undefined,
+              appleOriginalTransactionId: origTxId ?? originalTransactionId ?? undefined,
+              currentPeriodEnd,
+            },
+          });
+          this.logger.log(`[Apple IAP] Activated subscription for user ${userId}`);
+          return { success: true };
+        }
+      }
+      if (data.status !== 21007) break;
+    }
+    this.logger.warn(`[Apple IAP] Verify failed status=${lastStatus}`);
+    throw new BadRequestException('Invalid or expired receipt');
+  }
+
+  /**
+   * Верификация покупки Google Play и активация подписки.
+   * Требует GOOGLE_APPLICATION_CREDENTIALS (путь к JSON ключу) и ANDROID_PACKAGE_NAME в .env.
+   */
+  async verifyGoogleAndActivate(
+    userId: number,
+    purchaseToken: string,
+    productId: string,
+  ): Promise<{ success: boolean }> {
+    const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    const packageName = process.env.ANDROID_PACKAGE_NAME;
+    if (!keyPath || !packageName) {
+      this.logger.warn('[Google IAP] GOOGLE_APPLICATION_CREDENTIALS or ANDROID_PACKAGE_NAME not set');
+      throw new ServiceUnavailableException('Google IAP not configured');
+    }
+    const auth = new google.auth.GoogleAuth({
+      keyFile: keyPath,
+      scopes: ['https://www.googleapis.com/auth/androidpublisher'],
+    });
+    const androidPublisher = google.androidpublisher({ version: 'v3', auth });
+    const res = await androidPublisher.purchases.subscriptions.get({
+      packageName,
+      subscriptionId: productId,
+      token: purchaseToken,
+    });
+    const data = res.data;
+    const expiryMs = data.expiryTimeMillis ? parseInt(String(data.expiryTimeMillis), 10) : 0;
+    if (expiryMs <= Date.now()) {
+      throw new BadRequestException('Subscription expired');
+    }
+    const currentPeriodEnd = new Date(expiryMs);
+    await this.prisma.subscription.upsert({
+      where: { userId },
+      create: {
+        userId,
+        status: 'ACTIVE',
+        store: 'GOOGLE',
+        productId,
+        googlePurchaseToken: purchaseToken,
+        currentPeriodStart: new Date(),
+        currentPeriodEnd,
+      },
+      update: {
+        status: 'ACTIVE',
+        productId,
+        googlePurchaseToken: purchaseToken,
+        currentPeriodEnd,
+      },
+    });
+    this.logger.log(`[Google IAP] Activated subscription for user ${userId}`);
+    return { success: true };
   }
 }

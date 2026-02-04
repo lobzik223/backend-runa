@@ -49,6 +49,14 @@ const envSchema = z
 
   // Dynamic config
   SUBSCRIPTION_SITE_URL: z.string().url().default('https://runafinance.online/premium'),
+
+  // In-App Purchase verification (optional; if not set, /payments/apple/verify and /payments/google/verify return 503)
+  /** App-Specific Shared Secret from App Store Connect → Your App → App Information → App-Specific Shared Secret */
+  APPLE_SHARED_SECRET: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  /** Path to Google Play service account JSON key file (for Google Play Developer API). Or leave empty to disable Google verify. */
+  GOOGLE_APPLICATION_CREDENTIALS: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  /** Android package name (e.g. com.yourcompany.runa) — нужен для верификации подписок Google Play */
+  ANDROID_PACKAGE_NAME: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
   /** Ссылка на поддержку в Telegram (открывается при нажатии «Поддержка» в профиле). Можно менять без пересборки приложения. */
   SUPPORT_TELEGRAM_URL: z.string().url().default('https://t.me/RUNASUPPORT04'),
 
