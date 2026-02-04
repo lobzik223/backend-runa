@@ -19,8 +19,8 @@ COPY . .
 # Генерация Prisma клиента
 RUN npx prisma generate
 
-# Сборка приложения (лимит под сервер с ~2 GB RAM — не больше 1.5 GB heap, иначе OOM/тормоза)
-ENV NODE_OPTIONS="--max-old-space-size=1536"
+# Сборка приложения (нужен swap на сервере при 2 GB RAM; лимит 2 GB heap)
+ENV NODE_OPTIONS="--max-old-space-size=2048"
 RUN npm run build
 
 # Production образ
