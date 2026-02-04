@@ -1,0 +1,104 @@
+# Деплой на сервер БЕЗ сборки на сервере.
+# Образ бэкенда собираете на ПК и пушите в Docker Hub, здесь только pull.
+# Использование: docker compose -f docker-compose.server.yml pull && docker compose -f docker-compose.server.yml up -d
+#
+# Перед первым запуском замените YOUR_DOCKERHUB_LOGIN на свой логин и выполните на ПК:
+#   docker build -t YOUR_DOCKERHUB_LOGIN/backend-runa:latest .
+#   docker push YOUR_DOCKERHUB_LOGIN/backend-runa:latest
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: runa_postgres_prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-runa}
+      POSTGRES_USER: ${POSTGRES_USER:-runa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - runa_pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-runa} -d ${POSTGRES_DB:-runa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - runa_network_prod
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: runa_redis_prod
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-}"]
+    volumes:
+      - runa_redisdata_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - runa_network_prod
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    # Образ собран на ПК и запушен в Docker Hub — на сервере только pull, без build
+    image: ${BACKEND_IMAGE:-mxim04/backend-runa:latest}
+    container_name: runa_backend_prod
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_PREFIX: /api
+      DATABASE_URL: postgresql://${POSTGRES_USER:-runa}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-runa}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
+      GROK_API_KEY: ${GROK_API_KEY:-}
+      MAINTENANCE_FLAG_PATH: /app/data/maintenance.flag
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - runa_network_prod
+    restart: unless-stopped
+    volumes:
+      - ./prisma:/app/prisma:ro
+      - runa_data_prod:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  runa_pgdata_prod:
+  runa_redisdata_prod:
+  runa_data_prod:
+
+networks:
+  runa_network_prod:
+    driver: bridge
+    name: runa_network_prod
