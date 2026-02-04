@@ -19,8 +19,8 @@ COPY . .
 # Генерация Prisma клиента
 RUN npx prisma generate
 
-# Сборка приложения (увеличиваем лимит памяти — nest build может съедать много RAM)
-ENV NODE_OPTIONS="--max-old-space-size=4096"
+# Сборка приложения (лимит под сервер с ~2 GB RAM — не больше 1.5 GB heap, иначе OOM/тормоза)
+ENV NODE_OPTIONS="--max-old-space-size=1536"
 RUN npm run build
 
 # Production образ
