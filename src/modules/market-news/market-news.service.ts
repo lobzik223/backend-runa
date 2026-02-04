@@ -13,28 +13,31 @@ export interface MarketNewsItem {
 
 type MarketNewsLang = 'ru' | 'en';
 
-/** Только экономические/финансовые источники: биржа, ЦБ. На RU и EN — и Мосбиржа, и ЦБ. */
+/**
+ * Источники новостей финансового рынка РФ.
+ * Для lang=ru — только русскоязычные ленты (Московская биржа, ЦБ РФ).
+ * Для lang=en — английские ленты ЦБ; MOEX без отдельной EN-ленты.
+ */
 function getRssSources(lang: MarketNewsLang): { url: string; source: string }[] {
   const moexSource = lang === 'ru' ? 'Московская биржа' : 'Moscow Exchange';
   const cbrSource = lang === 'ru' ? 'ЦБ РФ' : 'Bank of Russia';
-  const base: { url: string; source: string }[] = [
-    { url: 'https://www.moex.com/export/news.aspx?cat=200', source: moexSource },
-    { url: 'https://www.moex.com/export/news.aspx?cat=201', source: moexSource },
-  ];
   if (lang === 'ru') {
-    base.push(
+    return [
       { url: 'https://www.cbr.ru/rss/RssNews', source: cbrSource },
+      { url: 'https://www.cbr.ru/rss/eventrss', source: cbrSource },
       { url: 'https://www.cbr.ru/rss/RssPress', source: cbrSource },
       { url: 'https://www.cbr.ru/rss/RssCurrency', source: cbrSource },
-    );
-  } else {
-    base.push(
-      { url: 'https://www.cbr.ru/rss/EngRssNews', source: cbrSource },
-      { url: 'https://www.cbr.ru/rss/engeventrss', source: cbrSource },
-      { url: 'https://www.cbr.ru/rss/EngRssPress', source: cbrSource },
-    );
+      { url: 'https://www.moex.com/export/news.aspx?cat=200', source: moexSource },
+      { url: 'https://www.moex.com/export/news.aspx?cat=201', source: moexSource },
+    ];
   }
-  return base;
+  return [
+    { url: 'https://www.moex.com/export/news.aspx?cat=200', source: moexSource },
+    { url: 'https://www.moex.com/export/news.aspx?cat=201', source: moexSource },
+    { url: 'https://www.cbr.ru/rss/EngRssNews', source: cbrSource },
+    { url: 'https://www.cbr.ru/rss/engeventrss', source: cbrSource },
+    { url: 'https://www.cbr.ru/rss/EngRssPress', source: cbrSource },
+  ];
 }
 
 const RSS_USER_AGENT =

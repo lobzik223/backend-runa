@@ -162,6 +162,7 @@ export class AuthService {
 
     // Default: 3 days trial for new user (even if no/invalid code)
     if (!referralCode) {
+      this.logger.warn(`[Referral] newUserId=${params.newUserId}: код пустой или не передан`);
       await this.grantTrialDays(params.newUserId, 3);
       return { applied: false, referralError: 'invalid' };
     }
@@ -172,6 +173,7 @@ export class AuthService {
     });
 
     if (!code) {
+      this.logger.warn(`[Referral] newUserId=${params.newUserId}: промокод не найден в БД code="${referralCode}"`);
       await this.grantTrialDays(params.newUserId, 3);
       return { applied: false, referralError: 'invalid' };
     }
@@ -181,12 +183,14 @@ export class AuthService {
       where: { codeId: code.id },
     });
     if (codeAlreadyUsed) {
+      this.logger.warn(`[Referral] newUserId=${params.newUserId}: промокод уже использован codeId=${code.id} inviterUserId=${code.userId}`);
       await this.grantTrialDays(params.newUserId, 3);
       return { applied: false, referralError: 'already_used' };
     }
 
     // prevent self-referral
     if (code.userId === params.newUserId) {
+      this.logger.warn(`[Referral] newUserId=${params.newUserId}: самореферал (userId=inviter)`);
       await this.grantTrialDays(params.newUserId, 3);
       return { applied: false, referralError: 'invalid' };
     }
@@ -196,17 +200,19 @@ export class AuthService {
       where: { inviteeUserId: params.newUserId },
     });
     if (existingRedemption) {
+      this.logger.warn(`[Referral] newUserId=${params.newUserId}: этот пользователь уже использовал другой промокод`);
       await this.grantTrialDays(params.newUserId, 3);
       return { applied: false, referralError: 'invalid' };
     }
 
-    // Abuse heuristics
+    // Abuse heuristics: тот же deviceId что и у пригласившего = подозрение на мультиаккаунт
     if (params.deviceId) {
       const inviterDevice = await this.prisma.device.findFirst({
         where: { deviceId: params.deviceId, userId: code.userId },
         select: { id: true },
       });
       if (inviterDevice) {
+        this.logger.warn(`[Referral] newUserId=${params.newUserId}: тот же deviceId что у пригласившего userId=${code.userId} (регистрация с устройства А)`);
         await this.grantTrialDays(params.newUserId, 3);
         return { applied: false, referralError: 'invalid' };
       }
@@ -218,6 +224,7 @@ export class AuthService {
         where: { ip: params.ip, createdAt: { gte: since } },
       });
       if (ipCount >= 3) {
+        this.logger.warn(`[Referral] newUserId=${params.newUserId}: с IP ${params.ip} уже 3+ реферала за 24ч`);
         await this.grantTrialDays(params.newUserId, 3);
         return { applied: false, referralError: 'invalid' };
       }
@@ -233,17 +240,18 @@ export class AuthService {
           ip: params.ip,
         },
       });
-    } catch {
+    } catch (err) {
+      this.logger.error(`[Referral] newUserId=${params.newUserId}: ошибка создания ReferralRedemption`, err instanceof Error ? err.message : err);
       await this.grantTrialDays(params.newUserId, 3);
       return { applied: false, referralError: 'invalid' };
     }
 
     // Invitee: 7 дней премиума (premiumUntil)
     await this.entitlementsService.grantPremium(params.newUserId, 7);
-
     // Inviter: всегда начисляем 7 дней премиума при успешном использовании кода (если уже есть премиум — продлеваем)
     await this.entitlementsService.grantPremium(code.userId, 7);
 
+    this.logger.log(`[Referral] OK: inviteeUserId=${params.newUserId} inviterUserId=${code.userId} code="${referralCode}" — обоим начислено 7 дней премиума`);
     return { applied: true };
   }
 
@@ -570,9 +578,11 @@ export class AuthService {
 
     await this.ensureDeviceSeen({ deviceId: input.deviceId, userId: user.id, ip: input.ip, userAgent: input.userAgent });
     await this.ensureUserReferralCode(user.id);
+    const referralCodeFromPayload = payload.referralCode ?? undefined;
+    this.logger.log(`[Referral] verifyRegistrationCode: newUserId=${user.id} email=${input.email} referralCode=${referralCodeFromPayload ? `"${referralCodeFromPayload}"` : 'null'} deviceId=${input.deviceId ?? 'null'}`);
     const referralResult = await this.applyReferralIfValid({
       newUserId: user.id,
-      referralCode: payload.referralCode ?? undefined,
+      referralCode: referralCodeFromPayload,
       deviceId: input.deviceId,
       ip: input.ip,
     });
