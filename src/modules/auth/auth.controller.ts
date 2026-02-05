@@ -17,6 +17,7 @@ import { RequestRestoreAccountDto } from './dto/request-restore-account.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { VerifyRegistrationCodeDto } from './dto/verify-registration-code.dto';
+import { ApplyReferralDto } from './dto/apply-referral.dto';
 import { JwtAccessGuard } from './guards/jwt-access.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import type { JwtAccessPayload, JwtRefreshPayload } from './types/jwt-payload';
@@ -124,6 +125,21 @@ export class AuthController {
       ...dto,
       ip: req.ip,
       userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @Post('apply-referral')
+  @UseGuards(JwtAccessGuard)
+  @Throttle({ default: { limit: 5, ttl: 60 } })
+  applyReferral(
+    @Req() req: Request & { user: JwtAccessPayload },
+    @Body() dto: ApplyReferralDto,
+  ) {
+    return this.auth.applyReferralForCurrentUser({
+      userId: req.user.sub,
+      referralCode: dto.referralCode,
+      deviceId: (req as any).headers?.['x-device-id'],
+      ip: req.ip,
     });
   }
 

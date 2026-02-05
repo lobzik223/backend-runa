@@ -28,5 +28,13 @@ export class ResetPinDto {
   @IsString()
   @MaxLength(8)
   otpCode?: string;
+
+  /**
+   * Re-auth option C (Google/Apple accounts): provide fresh id_token from Google Sign-In
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  googleIdToken?: string;
 }
 

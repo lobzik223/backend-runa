@@ -255,6 +255,40 @@ export class AuthService {
     return { applied: true };
   }
 
+  /**
+   * Применить промокод для уже залогиненного пользователя (после регистрации / создания PIN).
+   * Если пользователь уже использовал промокод — возвращает already_used.
+   */
+  async applyReferralForCurrentUser(params: {
+    userId: number;
+    referralCode: string;
+    deviceId?: string;
+    ip?: string;
+  }): Promise<{ referralApplied: boolean; referralError?: 'already_used' | 'invalid' }> {
+    const referralCode = this.normalizeReferralCode(params.referralCode);
+    if (!referralCode) {
+      return { referralApplied: false, referralError: 'invalid' };
+    }
+
+    const existingRedemption = await this.prisma.referralRedemption.findUnique({
+      where: { inviteeUserId: params.userId },
+    });
+    if (existingRedemption) {
+      return { referralApplied: false, referralError: 'already_used' };
+    }
+
+    const result = await this.applyReferralIfValid({
+      newUserId: params.userId,
+      referralCode,
+      deviceId: params.deviceId,
+      ip: params.ip,
+    });
+    return {
+      referralApplied: result.applied,
+      referralError: result.referralError,
+    };
+  }
+
   async requestOtp(input: { phoneE164: string; deviceId?: string; ip?: string; userAgent?: string }) {
     const phoneE164 = this.normalizePhone(input.phoneE164);
 

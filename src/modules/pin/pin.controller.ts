@@ -17,6 +17,11 @@ export class PinController {
     return this.pin.status(req.user.sub);
   }
 
+  @Get('reauth-method')
+  getReauthMethod(@Req() req: Request & { user: JwtAccessPayload }) {
+    return this.pin.getReauthMethod(req.user.sub);
+  }
+
   @Post('set')
   set(@Req() req: Request & { user: JwtAccessPayload }, @Body() dto: SetPinDto) {
     return this.pin.setPin(req.user.sub, dto);

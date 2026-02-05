@@ -27,6 +27,15 @@ export class PinService {
     }
   }
 
+  private async verifyGoogleIdToken(idToken: string): Promise<string | null> {
+    const res = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+    ).catch(() => null);
+    if (!res?.ok) return null;
+    const payload = (await res.json()) as { email?: string };
+    return payload.email ?? null;
+  }
+
   async status(userId: number) {
     const row = await this.prisma.pinSecurity.findUnique({
       where: { userId },
@@ -162,8 +171,14 @@ export class PinService {
       }
 
       await this.prisma.phoneOtp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
+    } else if (user.email && dto.googleIdToken?.trim()) {
+      const tokenEmail = await this.verifyGoogleIdToken(dto.googleIdToken.trim());
+      const normalized = tokenEmail?.trim().toLowerCase();
+      if (!normalized || normalized !== user.email.trim().toLowerCase()) {
+        throw new UnauthorizedException('Неверный Google аккаунт. Войдите в тот же аккаунт.');
+      }
     } else {
-      throw new BadRequestException('Невозможно выполнить re-auth для этого аккаунта');
+      throw new BadRequestException('Подтвердите личность через Google (повторный вход) или используйте другой способ восстановления.');
     }
 
     const pinHash = await this.hashPin(newPin);
@@ -189,6 +204,17 @@ export class PinService {
     });
 
     return { message: 'ok' };
+  }
+
+  async getReauthMethod(userId: number): Promise<{ method: 'password' | 'google' | 'otp' }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true, phoneE164: true },
+    });
+    if (!user) throw new UnauthorizedException('Пользователь не найден');
+    if (user.passwordHash) return { method: 'password' };
+    if (user.phoneE164) return { method: 'otp' };
+    return { method: 'google' };
   }
 }
 
