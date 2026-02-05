@@ -4,5 +4,5 @@ export class ApplyReferralDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(32)
-  referralCode: string;
+  referralCode!: string;
 }
