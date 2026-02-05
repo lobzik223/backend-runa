@@ -21,8 +21,8 @@ export class EntitlementsService {
       return false;
     }
 
-    // Check subscription status
-    if (user.subscription?.status === 'ACTIVE') {
+    // Check subscription from store (Apple/Google): ACTIVE и период не истёк
+    if (user.subscription?.status === 'ACTIVE' && user.subscription.currentPeriodEnd && new Date() < user.subscription.currentPeriodEnd) {
       return true;
     }
 
