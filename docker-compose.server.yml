@@ -58,6 +58,10 @@ services:
     # Образ собран на ПК и запушен в Docker Hub — на сервере только pull, без build
     image: ${BACKEND_IMAGE:-mxim04/backend-runa:latest}
     container_name: runa_backend_prod
+    deploy:
+      resources:
+        limits:
+          memory: 1200M
     ports:
       - "127.0.0.1:3000:3000"
     env_file:

@@ -19,9 +19,9 @@ COPY . .
 # Генерация Prisma клиента
 RUN npx prisma generate
 
-# Сборка приложения — жрёт много RAM. Ограничиваем heap, чтобы сервер не подвисал.
-# На слабом сервере собирать с лимитом: docker build --memory=2g -t ...
-ENV NODE_OPTIONS="--max-old-space-size=1536"
+# Сборка приложения — nest build требует ~1.8–2 GB heap. На сервере с 4 GB: docker build --memory=3g -t ...
+# На сервере с 2 GB: добавить swap (см. README) или собирать образ на ПК и пушить в Registry.
+ENV NODE_OPTIONS="--max-old-space-size=2048"
 RUN npm run build
 
 # Production образ
@@ -76,6 +76,8 @@ EXPOSE 3000
 # Переменные окружения по умолчанию
 ENV NODE_ENV=production
 ENV PORT=3000
+# Ограничение heap в проде — чтобы на сервере с 2 GB RAM бэкенд не съел всю память (Postgres + Redis тоже нужны)
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \

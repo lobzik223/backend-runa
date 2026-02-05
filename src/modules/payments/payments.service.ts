@@ -5,7 +5,6 @@ import {
   UnauthorizedException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { google } from 'googleapis';
 import { PrismaService } from '../prisma/prisma.service';
 import { EntitlementsService } from '../subscriptions/entitlements.service';
 
@@ -191,6 +190,8 @@ export class PaymentsService {
       this.logger.warn('[Google IAP] GOOGLE_APPLICATION_CREDENTIALS or ANDROID_PACKAGE_NAME not set');
       throw new ServiceUnavailableException('Google IAP not configured');
     }
+    // Ленивая загрузка googleapis — библиотека тяжёлая, не грузим при старте приложения (экономия RAM на сервере)
+    const { google } = await import('googleapis');
     const auth = new google.auth.GoogleAuth({
       keyFile: keyPath,
       scopes: ['https://www.googleapis.com/auth/androidpublisher'],
