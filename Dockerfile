@@ -19,9 +19,9 @@ COPY . .
 # Генерация Prisma клиента
 RUN npx prisma generate
 
-# Сборка приложения — ЭТОТ шаг жрёт много RAM (1.5–3 GB), не контейнер при работе.
-# nest build = компиляция всего TypeScript. На сервере с 2 GB лучше не собирать — образ собирать на ПК и пушить в Registry.
-ENV NODE_OPTIONS="--max-old-space-size=2048"
+# Сборка приложения — жрёт много RAM. Ограничиваем heap, чтобы сервер не подвисал.
+# На слабом сервере собирать с лимитом: docker build --memory=2g -t ...
+ENV NODE_OPTIONS="--max-old-space-size=1536"
 RUN npm run build
 
 # Production образ
