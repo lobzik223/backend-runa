@@ -1,4 +1,4 @@
-import { IsString, IsEnum, IsOptional, IsIn } from 'class-validator';
+import { IsString, IsOptional, IsIn } from 'class-validator';
 
 export enum Platform {
   IOS = 'ios',
@@ -14,9 +14,10 @@ export class UpdatePushTokenDto {
   @IsOptional()
   pushToken?: string | null; // null to remove token
 
-  @IsEnum(Platform)
+  /** ios | android | web — принимаем строку от клиента (React Native Platform.OS) */
   @IsOptional()
-  platform?: Platform;
+  @IsIn(['ios', 'android', 'web'])
+  platform?: string;
 
   /** Preferred language for push messages: ru | en (from app/device) */
   @IsOptional()

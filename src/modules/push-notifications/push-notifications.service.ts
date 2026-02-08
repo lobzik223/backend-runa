@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdatePushTokenDto } from './dto/update-push-token.dto';
 
@@ -47,36 +47,48 @@ export class PushNotificationsService {
    * Update or remove push token for a device
    */
   async updatePushToken(userId: number, dto: UpdatePushTokenDto) {
-    const device = await this.prisma.device.findUnique({
-      where: { deviceId: dto.deviceId },
-    });
-
-    if (!device) {
-      return this.prisma.device.create({
-        data: {
-          deviceId: dto.deviceId,
-          userId,
-          platform: dto.platform || null,
-          pushToken: dto.pushToken || null,
-          pushTokenUpdatedAt: dto.pushToken ? new Date() : null,
-          preferredLocale: dto.preferredLocale ?? null,
-        },
-      });
+    const deviceId = String(dto.deviceId ?? '').trim();
+    if (!deviceId) {
+      throw new InternalServerErrorException('deviceId is required');
     }
 
-    return this.prisma.device.update({
-      where: { deviceId: dto.deviceId },
-      data: {
-        userId,
-        ...(dto.platform !== undefined && { platform: dto.platform }),
-        ...(dto.pushToken !== undefined && {
-          pushToken: dto.pushToken,
-          pushTokenUpdatedAt: dto.pushToken ? new Date() : null,
-        }),
-        ...(dto.preferredLocale !== undefined && { preferredLocale: dto.preferredLocale }),
-        lastSeenAt: new Date(),
-      },
-    });
+    try {
+      const device = await this.prisma.device.findUnique({
+        where: { deviceId },
+      });
+
+      const platform = dto.platform == null ? null : String(dto.platform).toLowerCase();
+
+      if (!device) {
+        return this.prisma.device.create({
+          data: {
+            deviceId,
+            userId,
+            platform,
+            pushToken: dto.pushToken ?? null,
+            pushTokenUpdatedAt: dto.pushToken ? new Date() : null,
+            preferredLocale: dto.preferredLocale ?? null,
+          },
+        });
+      }
+
+      return this.prisma.device.update({
+        where: { deviceId },
+        data: {
+          userId,
+          ...(dto.platform !== undefined && { platform }),
+          ...(dto.pushToken !== undefined && {
+            pushToken: dto.pushToken ?? null,
+            pushTokenUpdatedAt: dto.pushToken ? new Date() : null,
+          }),
+          ...(dto.preferredLocale !== undefined && { preferredLocale: dto.preferredLocale }),
+          lastSeenAt: new Date(),
+        },
+      });
+    } catch (err: any) {
+      this.logger.error(`[PUSH] updatePushToken failed: ${err?.message ?? err}`, err?.stack);
+      throw new InternalServerErrorException('Failed to save push token');
+    }
   }
 
   /**
