@@ -10,7 +10,9 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
+import * as crypto from 'node:crypto';
 import { randomUUID } from 'node:crypto';
+import * as jwt from 'jsonwebtoken';
 import { env } from '../../config/env.validation';
 import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -820,6 +822,119 @@ export class AuthService {
       [payload.given_name, payload.family_name].filter(Boolean).join(' ').trim() ||
       email.split('@')[0];
     const safeName = (name ?? email).slice(0, 255);
+
+    let user = await this.prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        deletionRequestedAt: true,
+        scheduledDeleteAt: true,
+        restoreUntil: true,
+      },
+    });
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: { email, name: safeName, passwordHash: null },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          createdAt: true,
+          deletionRequestedAt: true,
+          scheduledDeleteAt: true,
+          restoreUntil: true,
+        },
+      });
+      await this.ensureUserReferralCode(user.id);
+    }
+
+    const now = new Date();
+    if (user.deletionRequestedAt && user.scheduledDeleteAt && user.scheduledDeleteAt.getTime() > now.getTime()) {
+      const restoreUntil = user.restoreUntil ? user.restoreUntil.getTime() : 0;
+      const daysLeftRestore = Math.max(0, Math.ceil((restoreUntil - now.getTime()) / (24 * 60 * 60 * 1000)));
+      const daysLeftDelete = Math.ceil((user.scheduledDeleteAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+      return {
+        message: 'account_scheduled_for_deletion',
+        accountScheduledForDeletion: true,
+        email: user.email,
+        daysLeftRestore,
+        daysLeftDelete,
+      } as any;
+    }
+
+    const sessionId = randomUUID();
+    const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+    await this.prisma.refreshSession.create({
+      data: {
+        id: sessionId,
+        userId: user.id,
+        expiresAt,
+        ip: input.ip,
+        userAgent: input.userAgent,
+      },
+    });
+
+    const tokens = await this.signTokens(user, sessionId);
+
+    return {
+      message: 'ok',
+      user,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  }
+
+  /**
+   * Вход или «регистрация» через Sign in with Apple по identity_token (JWT).
+   * Логика как у Google: один аккаунт на email; при первом входе Apple присылает email в токене.
+   */
+  async loginWithApple(input: { identityToken: string; ip?: string; userAgent?: string }) {
+    const token = input.identityToken;
+    let header: { kid?: string; alg?: string };
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) throw new Error('Invalid JWT');
+      const part0 = parts[0];
+      if (!part0) throw new Error('Invalid JWT');
+      header = JSON.parse(Buffer.from(part0, 'base64url').toString('utf8'));
+    } catch {
+      throw new UnauthorizedException('Недействительный Apple токен');
+    }
+
+    const kid = header.kid;
+    if (!kid) throw new UnauthorizedException('Apple токен без kid');
+
+    const keysRes = await fetch('https://appleid.apple.com/auth/keys').catch(() => null);
+    if (!keysRes?.ok) throw new ServiceUnavailableException('Не удалось проверить Apple токен');
+
+    const keysBody = (await keysRes.json()) as { keys?: Array<{ kid: string; n: string; e: string; kty: string }> };
+    const jwk = keysBody.keys?.find((k) => k.kid === kid);
+    if (!jwk?.n || !jwk?.e) throw new UnauthorizedException('Ключ Apple не найден');
+
+    let payload: { iss?: string; sub?: string; email?: string; email_verified?: boolean };
+    try {
+      const publicKey = crypto.createPublicKey({
+        key: { kty: jwk.kty || 'RSA', n: jwk.n, e: jwk.e },
+        format: 'jwk',
+      });
+      payload = jwt.verify(token, publicKey, {
+        algorithms: ['RS256'],
+        issuer: 'https://appleid.apple.com',
+      }) as typeof payload;
+    } catch {
+      throw new UnauthorizedException('Недействительный или просроченный Apple токен');
+    }
+
+    if (payload.iss !== 'https://appleid.apple.com') throw new UnauthorizedException('Неверный издатель Apple токена');
+
+    const email = payload.email ? this.normalizeEmail(payload.email) : null;
+    if (!email) throw new UnauthorizedException('Apple токен не содержит email. Войдите с передачей email.');
+
+    const safeName = (email.split('@')[0] ?? email).slice(0, 255);
 
     let user = await this.prisma.user.findUnique({
       where: { email },

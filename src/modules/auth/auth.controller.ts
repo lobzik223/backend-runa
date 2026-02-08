@@ -2,6 +2,7 @@ import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/comm
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { OtpRequestDto } from './dto/otp-request.dto';
@@ -103,6 +104,16 @@ export class AuthController {
   loginWithGoogle(@Body() dto: GoogleLoginDto, @Req() req: Request) {
     return this.auth.loginWithGoogle({
       idToken: dto.idToken,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @Post('apple')
+  @Throttle({ default: { limit: 10, ttl: 60 } })
+  loginWithApple(@Body() dto: AppleLoginDto, @Req() req: Request) {
+    return this.auth.loginWithApple({
+      identityToken: dto.identityToken,
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     });
