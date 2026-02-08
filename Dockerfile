@@ -1,6 +1,7 @@
 # Многоэтапная сборка для оптимизации размера образа
 # Используем Debian-slim, чтобы Python/gRPC ставились без боли (wheels).
-FROM node:20-bookworm-slim AS builder
+# Зеркало ECR Public — обходит лимит Docker Hub (429 Too Many Requests) при неаутентифицированном pull.
+FROM public.ecr.aws/docker/library/node:20-bookworm-slim AS builder
 
 # Установка рабочей директории
 WORKDIR /app
@@ -25,7 +26,7 @@ ENV NODE_OPTIONS="--max-old-space-size=2048"
 RUN npm run build
 
 # Production образ
-FROM node:20-bookworm-slim AS production
+FROM public.ecr.aws/docker/library/node:20-bookworm-slim AS production
 
 # Установка рабочей директории
 WORKDIR /app

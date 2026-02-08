@@ -33,6 +33,10 @@ npm run dev
 
 API base (matches current mobile client): `http://localhost:3000/api`
 
+## Сборка Docker-образа
+
+В Dockerfile используется образ из **ECR Public** (`public.ecr.aws/docker/library/node:20-bookworm-slim`), чтобы не упираться в лимит Docker Hub (429 Too Many Requests). Если нужен именно Docker Hub, выполни `docker login` и при желании замени в Dockerfile `public.ecr.aws/docker/library/node:20-bookworm-slim` на `node:20-bookworm-slim`.
+
 ## Проверка после deploy (Docker prod)
 
 ```bash
