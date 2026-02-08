@@ -107,7 +107,8 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  nameUpdatedAt DateTime @default(now())
+  nameUpdatedAt   DateTime  @default(now())
+  nameChangeCount Int       @default(0) // 0 = ещё не менял имя (первая смена без ограничения), далее раз в 14 дней
 
   refreshSessions RefreshSession[]
   pinSecurity     PinSecurity?

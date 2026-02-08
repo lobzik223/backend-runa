@@ -1290,22 +1290,25 @@ export class AuthService {
   async updateProfile(userId: number, dto: UpdateProfileDto) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, nameUpdatedAt: true },
+      select: { id: true, nameUpdatedAt: true, nameChangeCount: true },
     });
 
     if (!user) throw new UnauthorizedException('Пользователь не найден');
 
     if (dto.name) {
       const now = new Date();
-      const lastUpdate = user.nameUpdatedAt;
-      const diffMs = now.getTime() - lastUpdate.getTime();
-      const diffDays = diffMs / (1000 * 60 * 60 * 24);
+      const isFirstChange = (user.nameChangeCount ?? 0) === 0;
 
-      if (diffDays < 14) {
-        const remainingDays = Math.ceil(14 - diffDays);
-        throw new BadRequestException(
-          `Сменить имя можно раз в 14 дней. Попробуйте через ${remainingDays} дн.`,
-        );
+      if (!isFirstChange) {
+        const lastUpdate = user.nameUpdatedAt;
+        const diffMs = now.getTime() - lastUpdate.getTime();
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+        if (diffDays < 14) {
+          const remainingDays = Math.ceil(14 - diffDays);
+          throw new BadRequestException(
+            `Сменить имя можно раз в 14 дней. Попробуйте через ${remainingDays} дн.`,
+          );
+        }
       }
 
       await this.prisma.user.update({
@@ -1313,6 +1316,7 @@ export class AuthService {
         data: {
           name: dto.name.trim(),
           nameUpdatedAt: now,
+          nameChangeCount: (user.nameChangeCount ?? 0) + 1,
         },
       });
     }
