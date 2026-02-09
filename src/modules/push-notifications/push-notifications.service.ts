@@ -60,7 +60,7 @@ export class PushNotificationsService {
       const platform = dto.platform == null ? null : String(dto.platform).toLowerCase();
 
       if (!device) {
-        return this.prisma.device.create({
+        const created = await this.prisma.device.create({
           data: {
             deviceId,
             userId,
@@ -70,9 +70,11 @@ export class PushNotificationsService {
             preferredLocale: dto.preferredLocale ?? null,
           },
         });
+        this.logger.log(`[PUSH] Token registered: userId=${userId} deviceId=${deviceId} platform=${platform ?? '?'} hasToken=${!!dto.pushToken}`);
+        return created;
       }
 
-      return this.prisma.device.update({
+      const updated = await this.prisma.device.update({
         where: { deviceId },
         data: {
           userId,
@@ -85,6 +87,8 @@ export class PushNotificationsService {
           lastSeenAt: new Date(),
         },
       });
+      this.logger.log(`[PUSH] Token updated: userId=${userId} deviceId=${deviceId} platform=${platform ?? '?'} hasToken=${!!dto.pushToken}`);
+      return updated;
     } catch (err: any) {
       this.logger.error(`[PUSH] updatePushToken failed: ${err?.message ?? err}`, err?.stack);
       throw new InternalServerErrorException('Failed to save push token');
