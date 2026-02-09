@@ -31,6 +31,17 @@ async function bootstrap() {
   // Иконки акций (SVG из tinkofficon) — раздаём без авторизации
   app.use('/assets/icons', express.static(join(process.cwd(), 'tinkofficon')));
 
+  // Логирование запросов на сохранение push-токена (диагностика: доходит ли запрос с приложения)
+  app.use((req: any, res: any, next: any) => {
+    const reqPath = req?.originalUrl || req?.url || '';
+    if (req.method === 'POST' && reqPath.includes('push-notifications/token')) {
+      const hasAuth = !!req.headers?.authorization;
+      const logger = new Logger('PushTokenRequest');
+      logger.log(`[PUSH] Incoming POST push-notifications/token, Authorization: ${hasAuth ? 'present' : 'MISSING'}`);
+    }
+    next();
+  });
+
   // Lightweight app-level protection: allow only our mobile app if APP_KEY is configured.
   // This is NOT a replacement for HTTPS/JWT, but blocks random scanners.
   if (env.APP_KEY) {
