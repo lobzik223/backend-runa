@@ -6,20 +6,26 @@ import type { InvestmentAssetType } from '@prisma/client';
  * Tinkoff InvestAPI Market Data Provider
  * Uses Tinkoff InvestAPI gRPC to fetch real-time and historical market data
  */
+const TINKOFF_PRODUCTION_URL = 'https://invest-public-api.tinkoff.ru/rest';
+const TINKOFF_SANDBOX_URL = 'https://sandbox-invest-public-api.tinkoff.ru/rest';
+
 @Injectable()
 export class TinkoffMarketDataProvider implements MarketDataProvider {
   private readonly logger = new Logger(TinkoffMarketDataProvider.name);
   private readonly apiToken: string;
-  private readonly baseUrl = 'https://invest-public-api.tinkoff.ru/rest';
+  private readonly baseUrl: string;
   private readonly isSandbox: boolean;
 
   constructor() {
-    this.apiToken = process.env.TINKOFF_DEMO_TOKEN || process.env.TINKOFF_TOKEN || '';
-    this.isSandbox = !!process.env.TINKOFF_DEMO_TOKEN;
+    const demoToken = process.env.TINKOFF_DEMO_TOKEN || '';
+    const prodToken = process.env.TINKOFF_TOKEN || '';
+    this.isSandbox = !!demoToken;
+    this.apiToken = demoToken || prodToken;
+    this.baseUrl = this.isSandbox ? TINKOFF_SANDBOX_URL : TINKOFF_PRODUCTION_URL;
     if (!this.apiToken) {
       this.logger.warn('Tinkoff API token not configured. TinkoffMarketDataProvider will not work.');
     } else {
-      this.logger.log(`Tinkoff API initialized (${this.isSandbox ? 'SANDBOX' : 'PRODUCTION'} mode)`);
+      this.logger.log(`Tinkoff API initialized (${this.isSandbox ? 'SANDBOX' : 'PRODUCTION'} mode, baseUrl=${this.baseUrl})`);
     }
   }
 
@@ -148,7 +154,7 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
       });
 
       if (!response.ok) {
-        this.logger.warn(`Tinkoff search error: ${response.status}`);
+        this.logger.warn(`Tinkoff search error: ${response.status}. ${response.status === 401 ? 'Check TINKOFF_DEMO_TOKEN (sandbox) or TINKOFF_TOKEN in .env — token may be invalid or expired.' : ''}`);
         return [];
       }
 
@@ -200,6 +206,9 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          this.logger.warn('Tinkoff FindInstrument 401: token invalid or expired. Set TINKOFF_DEMO_TOKEN or TINKOFF_TOKEN in .env');
+        }
         return null;
       }
 
