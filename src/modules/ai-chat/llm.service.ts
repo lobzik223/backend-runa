@@ -98,7 +98,17 @@ export class LLMService {
     webSearchResults: WebSearchResult[] = [],
     responseLanguage: 'ru' | 'en' = 'ru',
   ): string {
-    const recentTransactionsText = financeContext.recentTransactions
+    const ctx = financeContext ?? {};
+    const recentTransactions = Array.isArray(ctx.recentTransactions) ? ctx.recentTransactions : [];
+    const currentMonth = ctx.currentMonth ?? { income: 0, expense: 0, net: 0 };
+    const topExpenseCategories = Array.isArray(ctx.topExpenseCategories) ? ctx.topExpenseCategories : [];
+    const topIncomeCategories = Array.isArray(ctx.topIncomeCategories) ? ctx.topIncomeCategories : [];
+    const goals = Array.isArray(ctx.goals) ? ctx.goals : [];
+    const creditAccounts = Array.isArray(ctx.creditAccounts) ? ctx.creditAccounts : [];
+    const portfolio = ctx.portfolio ?? { totalCost: 0, assetCount: 0 };
+    const exchangeRates = ctx.exchangeRates ?? null;
+
+    const recentTransactionsText = recentTransactions
       .slice(0, 15)
       .map((t: any) => {
         const date = new Date(t.date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
@@ -184,22 +194,22 @@ ${searchBlock}
 ДЕТАЛЬНЫЕ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ:
 
 📊 ТЕКУЩИЙ МЕСЯЦ:
-- Доходы: ${financeContext.currentMonth.income.toLocaleString('ru-RU')} ₽
-- Расходы: ${financeContext.currentMonth.expense.toLocaleString('ru-RU')} ₽
-- Остаток: ${financeContext.currentMonth.net.toLocaleString('ru-RU')} ₽
-- Норма сбережений: ${financeContext.savingsRate ? financeContext.savingsRate.toFixed(1) : '0'}%
+- Доходы: ${Number(currentMonth.income).toLocaleString('ru-RU')} ₽
+- Расходы: ${Number(currentMonth.expense).toLocaleString('ru-RU')} ₽
+- Остаток: ${Number(currentMonth.net).toLocaleString('ru-RU')} ₽
+- Норма сбережений: ${ctx.savingsRate != null ? Number(ctx.savingsRate).toFixed(1) : '0'}%
 
 💰 ТОП КАТЕГОРИЙ РАСХОДОВ:
-${financeContext.topExpenseCategories.length > 0
-  ? financeContext.topExpenseCategories.map((c: any, idx: number) =>
-      `${idx + 1}. ${c.category}: ${c.amount.toLocaleString('ru-RU')} ₽`
+${topExpenseCategories.length > 0
+  ? topExpenseCategories.map((c: any, idx: number) =>
+      `${idx + 1}. ${c.category}: ${Number(c.amount).toLocaleString('ru-RU')} ₽`
     ).join('\n')
   : 'Нет данных о расходах'}
 
 💵 ТОП КАТЕГОРИЙ ДОХОДОВ:
-${financeContext.topIncomeCategories.length > 0
-  ? financeContext.topIncomeCategories.map((c: any, idx: number) =>
-      `${idx + 1}. ${c.category}: ${c.amount.toLocaleString('ru-RU')} ₽`
+${topIncomeCategories.length > 0
+  ? topIncomeCategories.map((c: any, idx: number) =>
+      `${idx + 1}. ${c.category}: ${Number(c.amount).toLocaleString('ru-RU')} ₽`
     ).join('\n')
   : 'Нет данных о доходах'}
 
@@ -207,34 +217,34 @@ ${financeContext.topIncomeCategories.length > 0
 ${recentTransactionsText || 'Нет транзакций'}
 
 🎯 АКТИВНЫЕ ЦЕЛИ:
-${financeContext.goals.length > 0
-  ? financeContext.goals.map((g: any) => {
+${goals.length > 0
+  ? goals.map((g: any) => {
       const deadlineText = g.deadline ? ` (до ${new Date(g.deadline).toLocaleDateString('ru-RU')})` : '';
-      return `- ${g.name}: ${g.currentAmount.toLocaleString('ru-RU')} ₽ / ${g.targetAmount.toLocaleString('ru-RU')} ₽ (${Math.round(g.progressPercent)}%)${deadlineText}`;
+      return `- ${g.name}: ${Number(g.currentAmount).toLocaleString('ru-RU')} ₽ / ${Number(g.targetAmount).toLocaleString('ru-RU')} ₽ (${Math.round(Number(g.progressPercent) || 0)}%)${deadlineText}`;
     }).join('\n')
   : 'Нет активных целей'}
 
 💳 КРЕДИТЫ И ДОЛГИ:
-${financeContext.creditAccounts.length > 0
-  ? financeContext.creditAccounts.map((ca: any) => {
-      const limitAmount = ca.creditLimit ? ca.creditLimit.toLocaleString('ru-RU') : '';
-      const limitText = ca.creditLimit ? ` (лимит ${limitAmount} ₽)` : '';
+${creditAccounts.length > 0
+  ? creditAccounts.map((ca: any) => {
+      const limitAmount = ca.creditLimit != null ? Number(ca.creditLimit).toLocaleString('ru-RU') : '';
+      const limitText = ca.creditLimit != null ? ` (лимит ${limitAmount} ₽)` : '';
       const paymentDate = ca.nextPaymentDate ? new Date(ca.nextPaymentDate).toLocaleDateString('ru-RU') : '';
       const paymentText = ca.nextPaymentDate ? ` (платеж ${paymentDate})` : '';
-      return `- ${ca.name}: долг ${ca.currentDebt.toLocaleString('ru-RU')} ₽${limitText}${paymentText}`;
+      return `- ${ca.name}: долг ${Number(ca.currentDebt).toLocaleString('ru-RU')} ₽${limitText}${paymentText}`;
     }).join('\n')
   : 'Нет кредитов'}
 
 📈 ИНВЕСТИЦИОННЫЙ ПОРТФЕЛЬ:
-- Активов: ${financeContext.portfolio.assetCount}
-- Общая стоимость: ${financeContext.portfolio.totalCost.toLocaleString('ru-RU')} ₽
+- Активов: ${Number(portfolio.assetCount) || 0}
+- Общая стоимость: ${Number(portfolio.totalCost).toLocaleString('ru-RU')} ₽
 
 💱 АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ (обязательно используй ТОЛЬКО эти цифры для вопросов о валюте):
-${financeContext.exchangeRates
-  ? `- Дата курсов: ${financeContext.exchangeRates.date}
-- 1 USD = ${financeContext.exchangeRates.usd.toLocaleString('ru-RU')} ₽
-- 1 EUR = ${financeContext.exchangeRates.eur.toLocaleString('ru-RU')} ₽
-Для любых вопросов про курс рубля к доллару или евро отвечай ТОЛЬКО этими значениями и всегда указывай дату (${financeContext.exchangeRates.date}). Не используй свои старые знания о курсах.`
+${exchangeRates
+  ? `- Дата курсов: ${exchangeRates.date}
+- 1 USD = ${Number(exchangeRates.usd).toLocaleString('ru-RU')} ₽
+- 1 EUR = ${Number(exchangeRates.eur).toLocaleString('ru-RU')} ₽
+Для любых вопросов про курс рубля к доллару или евро отвечай ТОЛЬКО этими значениями и всегда указывай дату (${exchangeRates.date}). Не используй свои старые знания о курсах.`
   : 'Данные о курсах сейчас недоступны. Если пользователь спросит про курс валют — честно скажи, что у тебя нет актуальных курсов в этом запросе, и порекомендуй проверить на cbr.ru или в приложении.'}
 
 🔍 АНАЛИТИКА И РЕКОМЕНДАЦИИ ОТ СИСТЕМЫ:

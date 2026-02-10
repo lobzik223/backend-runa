@@ -52,111 +52,119 @@ export class AIChatService {
     threadId?: string,
     preferredLanguage?: 'ru' | 'en',
   ): Promise<ChatResponse> {
-    // 1. Очистка старых сообщений перед обработкой нового
-    await this.cleanupOldMessages(userId);
+    const step = (name: string) => (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[AI Chat] Failed at step "${name}": ${msg}`);
+      throw err;
+    };
 
-    // Validate message safety
-    const safetyCheck = this.llmService.validateUserMessage(userMessage);
-    if (!safetyCheck.safe) {
-      throw new BadRequestException(safetyCheck.reason);
-    }
+    try {
+      // 1. Очистка старых сообщений перед обработкой нового
+      await this.cleanupOldMessages(userId).catch(step('cleanupOldMessages'));
 
-    // Check message limits
-    await this.checkMessageLimit(userId);
-
-    // Get or create thread
-    let thread;
-    if (threadId) {
-      thread = await this.prisma.aiThread.findUnique({
-        where: { id: threadId },
-      });
-      if (!thread) {
-        throw new BadRequestException('Thread not found');
+      // Validate message safety
+      const safetyCheck = this.llmService.validateUserMessage(userMessage);
+      if (!safetyCheck.safe) {
+        throw new BadRequestException(safetyCheck.reason);
       }
-      if (thread.userId !== userId) {
-        throw new ForbiddenException('Thread does not belong to user');
+
+      // Check message limits
+      await this.checkMessageLimit(userId);
+
+      // Get or create thread
+      let thread;
+      if (threadId) {
+        thread = await this.prisma.aiThread.findUnique({
+          where: { id: threadId },
+        });
+        if (!thread) {
+          throw new BadRequestException('Thread not found');
+        }
+        if (thread.userId !== userId) {
+          throw new ForbiddenException('Thread does not belong to user');
+        }
+      } else {
+        thread = await this.prisma.aiThread.create({
+          data: {
+            userId,
+            title: userMessage.substring(0, 50), // Auto-title from first message
+          },
+        });
       }
-    } else {
-      thread = await this.prisma.aiThread.create({
+
+      // Save user message
+      await this.prisma.aiMessage.create({
         data: {
           userId,
-          title: userMessage.substring(0, 50), // Auto-title from first message
+          threadId: thread.id,
+          role: 'USER',
+          content: userMessage,
         },
       });
-    }
 
-    // Save user message
-    const userMsg = await this.prisma.aiMessage.create({
-      data: {
-        userId,
-        threadId: thread.id,
-        role: 'USER',
-        content: userMessage,
-      },
-    });
+      // Get finance context
+      const financeContext = await this.financeContextService.getFinanceContext(userId).catch(step('getFinanceContext'));
 
-    // Get finance context
-    const financeContext = await this.financeContextService.getFinanceContext(userId);
+      // Run rules engine
+      let structuredOutputs = this.rulesEngine.analyze(financeContext);
 
-    // Run rules engine
-    let structuredOutputs = this.rulesEngine.analyze(financeContext);
+      // Check if user is requesting charts
+      const isChartRequest = this.detectChartRequest(userMessage);
+      let chartData = null;
 
-    // Check if user is requesting charts
-    const isChartRequest = this.detectChartRequest(userMessage);
-    let chartData = null;
+      if (isChartRequest) {
+        const dateRange = this.extractDateRange(userMessage);
+        chartData = await this.chartDataService.getDonutChartData(
+          userId,
+          dateRange?.start,
+          dateRange?.end,
+        ).catch(step('getDonutChartData'));
 
-    if (isChartRequest) {
-      // Extract date range from message if specified
-      const dateRange = this.extractDateRange(userMessage);
-      chartData = await this.chartDataService.getDonutChartData(
-        userId,
-        dateRange?.start,
-        dateRange?.end,
-      );
+        structuredOutputs.push({
+          type: 'chart_request',
+          payload: {
+            title: 'График доходов и расходов',
+            chartType: 'donut',
+            data: chartData,
+          },
+        });
+      }
 
-      // Add chart request to structured outputs
-      structuredOutputs.push({
-        type: 'chart_request',
-        payload: {
-          title: 'График доходов и расходов',
-          chartType: 'donut',
-          data: chartData,
+      const webSearchResults = await this.webSearchService.search(userMessage);
+
+      const llmResponse = await this.llmService.generateResponse(
+        userMessage,
+        structuredOutputs,
+        financeContext,
+        webSearchResults,
+        preferredLanguage,
+      ).catch(step('generateResponse'));
+
+      const assistantMsg = await this.prisma.aiMessage.create({
+        data: {
+          userId,
+          threadId: thread.id,
+          role: 'ASSISTANT',
+          content: llmResponse.text,
+          model: llmResponse.model,
+          tokensIn: llmResponse.tokensUsed?.input,
+          tokensOut: llmResponse.tokensUsed?.output,
         },
       });
-    }
 
-    // Поиск актуальных данных по запросу пользователя (курсы, даты, факты)
-    const webSearchResults = await this.webSearchService.search(userMessage);
-
-    // Generate LLM response (language: from param or detect from message)
-    const llmResponse = await this.llmService.generateResponse(
-      userMessage,
-      structuredOutputs,
-      financeContext,
-      webSearchResults,
-      preferredLanguage,
-    );
-
-    // Save assistant message
-    const assistantMsg = await this.prisma.aiMessage.create({
-      data: {
-        userId,
+      return {
+        message: llmResponse.text,
+        structuredOutputs,
+        chartData: chartData || undefined,
         threadId: thread.id,
-        role: 'ASSISTANT',
-        content: llmResponse.text,
-        model: llmResponse.model,
-        tokensIn: llmResponse.tokensUsed?.input,
-        tokensOut: llmResponse.tokensUsed?.output,
-      },
-    });
-
-    return {
-      message: llmResponse.text,
-      structuredOutputs,
-      chartData: chartData || undefined,
-      threadId: thread.id,
-      messageId: assistantMsg.id,
-    };
+        messageId: assistantMsg.id,
+      };
+    } catch (err) {
+      if (err instanceof BadRequestException || err instanceof ForbiddenException) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[AI Chat] sendMessage error: ${msg}`, err instanceof Error ? err.stack : undefined);
+      throw err;
+    }
   }
 
   /**
