@@ -1,4 +1,14 @@
-import { Controller, Post, Body, Get, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Param,
+  UseGuards,
+  InternalServerErrorException,
+  Logger,
+  HttpException,
+} from '@nestjs/common';
 import { AIChatService } from './ai-chat.service';
 import { ChatMessageDto } from './dto/chat-message.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
@@ -8,6 +18,8 @@ import { JwtAccessPayload } from '../auth/types/jwt-payload';
 @Controller('ai')
 @UseGuards(JwtAccessGuard)
 export class AIChatController {
+  private readonly logger = new Logger(AIChatController.name);
+
   constructor(private readonly aiChatService: AIChatService) {}
 
   /**
@@ -16,7 +28,22 @@ export class AIChatController {
    */
   @Post('chat')
   async sendMessage(@CurrentUser() user: JwtAccessPayload, @Body() dto: ChatMessageDto) {
-    return this.aiChatService.sendMessage(user.sub, dto.message, dto.threadId, dto.preferredLanguage);
+    try {
+      return await this.aiChatService.sendMessage(
+        user.sub,
+        dto.message,
+        dto.threadId,
+        dto.preferredLanguage,
+      );
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      this.logger.error(`[AI Chat] sendMessage failed: ${msg}`, stack);
+      throw new InternalServerErrorException(
+        'Не удалось обработать сообщение. Попробуйте позже.',
+      );
+    }
   }
 
   /**

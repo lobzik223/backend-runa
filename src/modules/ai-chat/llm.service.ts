@@ -306,7 +306,14 @@ ${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. 
       throw new Error(`Grok API error: ${JSON.stringify(errData)}`);
     }
 
-    const data: any = await response.json();
+    const rawBody = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      this.logger.error('[Grok] Invalid JSON in response');
+      throw new Error('Grok API returned invalid JSON');
+    }
     const text = data.choices?.[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
 
     this.logger.log(`[Grok] Success! Response length: ${text.length}, tokens: ${data.usage?.total_tokens ?? 0}`);
@@ -348,11 +355,25 @@ ${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. 
     });
 
     if (!response.ok) {
-      const errData = await response.json();
+      const errText = await response.text();
+      let errData: any;
+      try {
+        errData = JSON.parse(errText);
+      } catch {
+        errData = { message: errText || response.statusText };
+      }
+      this.logger.error(`[OpenAI] API error (${response.status}): ${JSON.stringify(errData)}`);
       throw new Error(`OpenAI API error: ${JSON.stringify(errData)}`);
     }
 
-    const data: any = await response.json();
+    const rawBody = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      this.logger.error('[OpenAI] Invalid JSON in response');
+      throw new Error('OpenAI API returned invalid JSON');
+    }
     const text = data.choices[0]?.message?.content || 'Извините, я не смог сформулировать ответ.';
 
     return {
