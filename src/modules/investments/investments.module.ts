@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { InvestmentsService } from './investments.service';
 import { InvestmentsController } from './investments.controller';
 import { PrismaModule } from '../prisma/prisma.module';
+import { env } from '../../config/env.validation';
 import { MockMarketDataProvider } from './providers/mock-market-data.provider';
 import { CachedMarketDataProvider } from './providers/cached-market-data.provider';
 import { MoexMarketDataProvider } from './providers/moex-market-data.provider';
@@ -23,7 +24,7 @@ import { TinkoffMarketDataProvider } from './providers/tinkoff-market-data.provi
         mockProvider: MockMarketDataProvider,
       ) => {
         // Prefer Tinkoff if token is configured, otherwise fallback to MOEX, then mock
-        const tinkoffToken = process.env.TINKOFF_DEMO_TOKEN || process.env.TINKOFF_TOKEN;
+        const tinkoffToken = (env.TINKOFF_DEMO_TOKEN ?? env.TINKOFF_TOKEN)?.trim();
         if (tinkoffToken) {
           return new CachedMarketDataProvider(tinkoff);
         }

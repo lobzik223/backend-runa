@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { MarketDataProvider, AssetSearchResult } from '../interfaces/market-data-provider.interface';
 import type { InvestmentAssetType } from '@prisma/client';
+import { env } from '../../../config/env.validation';
 
 /**
  * Tinkoff InvestAPI Market Data Provider
@@ -19,15 +20,18 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
   private lastUnauthorizedWarnAt = 0;
 
   constructor() {
-    const demoToken = process.env.TINKOFF_DEMO_TOKEN || '';
-    const prodToken = process.env.TINKOFF_TOKEN || '';
-    this.isSandbox = !!demoToken;
-    this.apiToken = demoToken || prodToken;
+    const rawDemo = env.TINKOFF_DEMO_TOKEN?.trim() ?? '';
+    const rawProd = env.TINKOFF_TOKEN?.trim() ?? '';
+    this.isSandbox = !!rawDemo;
+    this.apiToken = rawDemo || rawProd;
     this.baseUrl = this.isSandbox ? TINKOFF_SANDBOX_URL : TINKOFF_PRODUCTION_URL;
     if (!this.apiToken) {
       this.logger.warn('Tinkoff API token not configured. TinkoffMarketDataProvider will not work.');
     } else {
-      this.logger.log(`Tinkoff API initialized (${this.isSandbox ? 'SANDBOX' : 'PRODUCTION'} mode, baseUrl=${this.baseUrl})`);
+      const prefix = this.apiToken.slice(0, 5);
+      this.logger.log(
+        `Tinkoff API initialized (${this.isSandbox ? 'SANDBOX' : 'PRODUCTION'}, baseUrl=${this.baseUrl}, token length=${this.apiToken.length}, prefix=${prefix}...)`,
+      );
     }
   }
 
