@@ -8,6 +8,7 @@ import type { InvestmentAssetType } from '@prisma/client';
  */
 const TINKOFF_PRODUCTION_URL = 'https://invest-public-api.tinkoff.ru/rest';
 const TINKOFF_SANDBOX_URL = 'https://sandbox-invest-public-api.tinkoff.ru/rest';
+const UNAUTHORIZED_WARN_COOLDOWN_MS = 5 * 60 * 1000; // не спамить лог 401 чаще раза в 5 минут
 
 @Injectable()
 export class TinkoffMarketDataProvider implements MarketDataProvider {
@@ -15,6 +16,7 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
   private readonly apiToken: string;
   private readonly baseUrl: string;
   private readonly isSandbox: boolean;
+  private lastUnauthorizedWarnAt = 0;
 
   constructor() {
     const demoToken = process.env.TINKOFF_DEMO_TOKEN || '';
@@ -27,6 +29,17 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
     } else {
       this.logger.log(`Tinkoff API initialized (${this.isSandbox ? 'SANDBOX' : 'PRODUCTION'} mode, baseUrl=${this.baseUrl})`);
     }
+  }
+
+  /** Логировать 401 не чаще раза в 5 минут, чтобы не забивать логи. */
+  private warnOnce401(context: string): void {
+    const now = Date.now();
+    if (now - this.lastUnauthorizedWarnAt < UNAUTHORIZED_WARN_COOLDOWN_MS) return;
+    this.lastUnauthorizedWarnAt = now;
+    this.logger.warn(
+      `Tinkoff API 401 (${context}): токен не задан, неверный или просрочен. ` +
+        'Песочница: TINKOFF_DEMO_TOKEN. Боевой: TINKOFF_TOKEN. См. docs/SETUP-TINKOFF.md',
+    );
   }
 
   /**
@@ -154,7 +167,7 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
       });
 
       if (!response.ok) {
-        this.logger.warn(`Tinkoff search error: ${response.status}. ${response.status === 401 ? 'Check TINKOFF_DEMO_TOKEN (sandbox) or TINKOFF_TOKEN in .env — token may be invalid or expired.' : ''}`);
+        if (response.status === 401) this.warnOnce401('search');
         return [];
       }
 
@@ -206,9 +219,7 @@ export class TinkoffMarketDataProvider implements MarketDataProvider {
       });
 
       if (!response.ok) {
-        if (response.status === 401) {
-          this.logger.warn('Tinkoff FindInstrument 401: token invalid or expired. Set TINKOFF_DEMO_TOKEN or TINKOFF_TOKEN in .env');
-        }
+        if (response.status === 401) this.warnOnce401('FindInstrument');
         return null;
       }
 
