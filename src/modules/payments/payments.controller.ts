@@ -46,6 +46,19 @@ export class PaymentsController {
     return {};
   }
 
+  /** После возврата с оплаты: проверить платёж в ЮKassa и выдать подписку при успехе (если webhook ещё не сработал). */
+  @Post('confirm-return')
+  async confirmReturn(
+    @Headers('x-runa-site-key') siteKey: string,
+    @Body() body: { paymentId: string },
+  ) {
+    this.paymentsService.validateSiteKey(siteKey);
+    if (!body.paymentId || typeof body.paymentId !== 'string') {
+      throw new BadRequestException('Укажите paymentId');
+    }
+    return this.paymentsService.confirmReturnPayment(body.paymentId);
+  }
+
   @Post('demo')
   async demoPayment(
     @Headers('x-runa-site-key') siteKey: string,

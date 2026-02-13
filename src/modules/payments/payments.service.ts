@@ -143,38 +143,27 @@ export class PaymentsService {
   }
 
   /**
-   * Обработка webhook от ЮKassa. Подписку выдаём только после подтверждения оплаты (payment.succeeded).
-   * Проверяем платёж через API и защищаемся от повторной выдачи по idempotence в БД.
+   * Проверить платёж в ЮKassa и выдать подписку при status === 'succeeded'.
+   * Используется webhook'ом и страницей успеха (confirm-return). Идемпотентно.
    */
-  async handleYooKassaWebhook(body: {
-    type?: string;
-    event?: string;
-    object?: { id?: string };
-  }): Promise<void> {
-    if (body.type !== 'notification' || body.event !== 'payment.succeeded' || !body.object?.id) {
-      return;
-    }
-
+  async processSucceededYooKassaPayment(yookassaPaymentId: string): Promise<{ granted: boolean }> {
     const auth = this.getYooKassaAuth();
     if (!auth) {
-      this.logger.warn('[YooKassa] Webhook ignored: YooKassa not configured');
-      return;
+      return { granted: false };
     }
-
-    const yookassaPaymentId = body.object.id;
 
     const existing = await this.prisma.yooKassaPayment.findUnique({
       where: { yookassaPaymentId },
     });
 
     if (!existing) {
-      this.logger.warn(`[YooKassa] Webhook for unknown payment ${yookassaPaymentId}`);
-      return;
+      this.logger.warn(`[YooKassa] Unknown payment ${yookassaPaymentId}`);
+      return { granted: false };
     }
 
     if (existing.status === 'SUCCEEDED' && existing.grantedAt) {
-      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} already granted, skip`);
-      return;
+      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} already granted`);
+      return { granted: true };
     }
 
     const basicAuth = Buffer.from(`${auth.shopId}:${auth.secretKey}`).toString('base64');
@@ -185,7 +174,7 @@ export class PaymentsService {
 
     if (!getRes.ok) {
       this.logger.warn(`[YooKassa] Failed to get payment ${yookassaPaymentId}`, getRes.status);
-      return;
+      return { granted: false };
     }
 
     const payment = (await getRes.json()) as {
@@ -195,12 +184,12 @@ export class PaymentsService {
     };
 
     if (payment.status !== 'succeeded') {
-      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} status is ${payment.status}, skip grant`);
+      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} status is ${payment.status}`);
       await this.prisma.yooKassaPayment.update({
         where: { yookassaPaymentId },
         data: { status: payment.status.toUpperCase().replace('-', '_') },
       });
-      return;
+      return { granted: false };
     }
 
     const planId = payment.metadata?.planId ?? existing.planId;
@@ -213,7 +202,7 @@ export class PaymentsService {
         where: { yookassaPaymentId },
         data: { status: 'SUCCEEDED' },
       });
-      return;
+      return { granted: false };
     }
 
     const user = await this.findUser(emailOrId);
@@ -223,7 +212,7 @@ export class PaymentsService {
         where: { yookassaPaymentId },
         data: { status: 'SUCCEEDED' },
       });
-      return;
+      return { granted: false };
     }
 
     const days = plan.durationMonths * 30;
@@ -252,6 +241,33 @@ export class PaymentsService {
     });
 
     this.logger.log(`[YooKassa] Premium granted for user ${user.id} (${user.email}) after payment ${yookassaPaymentId}, plan ${planId}, ${days} days`);
+    return { granted: true };
+  }
+
+  /**
+   * Обработка webhook от ЮKassa. Подписку выдаём только после подтверждения оплаты (payment.succeeded).
+   */
+  async handleYooKassaWebhook(body: {
+    type?: string;
+    event?: string;
+    object?: { id?: string };
+  }): Promise<void> {
+    if (body.type !== 'notification' || body.event !== 'payment.succeeded' || !body.object?.id) {
+      return;
+    }
+    await this.processSucceededYooKassaPayment(body.object.id);
+  }
+
+  /**
+   * Подтверждение после возврата с платёжной страницы: проверяем платёж в ЮKassa и выдаём подписку при успехе.
+   * Вызывается со страницы /premium/success (если webhook ещё не сработал).
+   */
+  async confirmReturnPayment(paymentId: string): Promise<{ granted: boolean }> {
+    const trimmed = String(paymentId).trim();
+    if (!trimmed) {
+      throw new BadRequestException('Укажите идентификатор платежа');
+    }
+    return this.processSucceededYooKassaPayment(trimmed);
   }
 
   /**
