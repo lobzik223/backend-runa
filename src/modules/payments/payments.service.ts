@@ -73,6 +73,15 @@ export class PaymentsService {
       throw new BadRequestException('Укажите Email или ID аккаунта из приложения');
     }
 
+    // Строгая проверка: аккаунт должен существовать в БД (по ID или email). Платёж создаём только для существующего пользователя.
+    const user = await this.findUser(trimmedEmailOrId);
+    if (!user) {
+      this.logger.warn(`[YooKassa] Create payment rejected: account not found for emailOrId=${trimmedEmailOrId}`);
+      throw new BadRequestException(
+        'Аккаунт не найден. Проверьте Email или ID аккаунта из профиля в приложении и попробуйте снова.',
+      );
+    }
+
     const idempotenceKey = `runa-${planId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const basicAuth = Buffer.from(`${auth.shopId}:${auth.secretKey}`).toString('base64');
 
