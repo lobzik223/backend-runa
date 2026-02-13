@@ -15,6 +15,8 @@ export interface PaymentPlan {
   description: string;
 }
 
+const YOOKASSA_API = 'https://api.yookassa.ru/v3';
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -30,6 +32,13 @@ export class PaymentsService {
     private entitlementsService: EntitlementsService,
   ) {}
 
+  private getYooKassaAuth(): { shopId: string; secretKey: string } | null {
+    const shopId = process.env.YOOKASSA_SHOP_ID;
+    const secretKey = process.env.YOOKASSA_SECRET_KEY;
+    if (!shopId || !secretKey) return null;
+    return { shopId: String(shopId), secretKey };
+  }
+
   getPlans() {
     return Object.values(this.plans);
   }
@@ -39,10 +48,212 @@ export class PaymentsService {
   }
 
   /**
-   * Демо-оплата: выдать подписку без реальной оплаты (для теста с сайта).
-   * Ищет пользователя по email или ID, начисляет период по тарифу.
+   * Создать платёж в ЮKassa и сохранить запись в БД (PENDING).
+   * Возвращает confirmation_url для редиректа пользователя.
+   */
+  async createYooKassaPayment(
+    planId: string,
+    emailOrId: string,
+    returnUrl: string,
+    cancelUrl: string,
+  ): Promise<{ confirmationUrl: string; paymentId: string }> {
+    const auth = this.getYooKassaAuth();
+    if (!auth) {
+      this.logger.warn('[YooKassa] YOOKASSA_SHOP_ID or YOOKASSA_SECRET_KEY not set');
+      throw new ServiceUnavailableException('Оплата через ЮKassa не настроена');
+    }
+
+    const plan = this.plans[planId];
+    if (!plan) {
+      throw new BadRequestException('Неверный тариф');
+    }
+
+    const trimmedEmailOrId = String(emailOrId).trim();
+    if (!trimmedEmailOrId) {
+      throw new BadRequestException('Укажите Email или ID аккаунта из приложения');
+    }
+
+    const idempotenceKey = `runa-${planId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const basicAuth = Buffer.from(`${auth.shopId}:${auth.secretKey}`).toString('base64');
+
+    const body = {
+      amount: { value: String(plan.price.toFixed(2)), currency: 'RUB' },
+      capture: true,
+      confirmation: {
+        type: 'redirect',
+        return_url: returnUrl,
+        enforce: false,
+      },
+      description: plan.description.slice(0, 128),
+      metadata: { planId, emailOrId: trimmedEmailOrId },
+    };
+
+    const res = await fetch(`${YOOKASSA_API}/payments`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        'Idempotence-Key': idempotenceKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = (await res.json()) as {
+      id?: string;
+      status?: string;
+      confirmation?: { confirmation_url?: string };
+      code?: string;
+      description?: string;
+    };
+
+    if (!res.ok) {
+      this.logger.warn('[YooKassa] Create payment failed', { code: data.code, description: data.description });
+      throw new BadRequestException(data.description || 'Не удалось создать платёж');
+    }
+
+    const yookassaPaymentId = data.id;
+    const confirmationUrl = data.confirmation?.confirmation_url;
+
+    if (!yookassaPaymentId || !confirmationUrl) {
+      this.logger.warn('[YooKassa] Missing id or confirmation_url in response', data);
+      throw new ServiceUnavailableException('Некорректный ответ от платёжной системы');
+    }
+
+    await this.prisma.yooKassaPayment.create({
+      data: {
+        yookassaPaymentId,
+        planId,
+        emailOrId: trimmedEmailOrId,
+        status: 'PENDING',
+      },
+    });
+
+    this.logger.log(`[YooKassa] Payment created ${yookassaPaymentId} for plan ${planId}, emailOrId=${trimmedEmailOrId}`);
+
+    return { confirmationUrl, paymentId: yookassaPaymentId };
+  }
+
+  /**
+   * Обработка webhook от ЮKassa. Подписку выдаём только после подтверждения оплаты (payment.succeeded).
+   * Проверяем платёж через API и защищаемся от повторной выдачи по idempotence в БД.
+   */
+  async handleYooKassaWebhook(body: {
+    type?: string;
+    event?: string;
+    object?: { id?: string };
+  }): Promise<void> {
+    if (body.type !== 'notification' || body.event !== 'payment.succeeded' || !body.object?.id) {
+      return;
+    }
+
+    const auth = this.getYooKassaAuth();
+    if (!auth) {
+      this.logger.warn('[YooKassa] Webhook ignored: YooKassa not configured');
+      return;
+    }
+
+    const yookassaPaymentId = body.object.id;
+
+    const existing = await this.prisma.yooKassaPayment.findUnique({
+      where: { yookassaPaymentId },
+    });
+
+    if (!existing) {
+      this.logger.warn(`[YooKassa] Webhook for unknown payment ${yookassaPaymentId}`);
+      return;
+    }
+
+    if (existing.status === 'SUCCEEDED' && existing.grantedAt) {
+      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} already granted, skip`);
+      return;
+    }
+
+    const basicAuth = Buffer.from(`${auth.shopId}:${auth.secretKey}`).toString('base64');
+    const getRes = await fetch(`${YOOKASSA_API}/payments/${yookassaPaymentId}`, {
+      method: 'GET',
+      headers: { Authorization: `Basic ${basicAuth}` },
+    });
+
+    if (!getRes.ok) {
+      this.logger.warn(`[YooKassa] Failed to get payment ${yookassaPaymentId}`, getRes.status);
+      return;
+    }
+
+    const payment = (await getRes.json()) as {
+      id: string;
+      status: string;
+      metadata?: { planId?: string; emailOrId?: string };
+    };
+
+    if (payment.status !== 'succeeded') {
+      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} status is ${payment.status}, skip grant`);
+      await this.prisma.yooKassaPayment.update({
+        where: { yookassaPaymentId },
+        data: { status: payment.status.toUpperCase().replace('-', '_') },
+      });
+      return;
+    }
+
+    const planId = payment.metadata?.planId ?? existing.planId;
+    const emailOrId = payment.metadata?.emailOrId ?? existing.emailOrId;
+    const plan = this.plans[planId];
+
+    if (!plan) {
+      this.logger.warn(`[YooKassa] Unknown planId ${planId} for payment ${yookassaPaymentId}`);
+      await this.prisma.yooKassaPayment.update({
+        where: { yookassaPaymentId },
+        data: { status: 'SUCCEEDED' },
+      });
+      return;
+    }
+
+    const user = await this.findUser(emailOrId);
+    if (!user) {
+      this.logger.warn(`[YooKassa] User not found for emailOrId=${emailOrId}, payment ${yookassaPaymentId}`);
+      await this.prisma.yooKassaPayment.update({
+        where: { yookassaPaymentId },
+        data: { status: 'SUCCEEDED' },
+      });
+      return;
+    }
+
+    const days = plan.durationMonths * 30;
+    await this.entitlementsService.grantPremium(user.id, days);
+
+    await this.prisma.subscription.upsert({
+      where: { userId: user.id },
+      create: {
+        userId: user.id,
+        status: 'ACTIVE',
+        store: 'INTERNAL',
+        productId: planId,
+        currentPeriodStart: new Date(),
+        currentPeriodEnd: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
+      },
+      update: {
+        status: 'ACTIVE',
+        productId: planId,
+        currentPeriodEnd: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    await this.prisma.yooKassaPayment.update({
+      where: { yookassaPaymentId },
+      data: { status: 'SUCCEEDED', userId: user.id, grantedAt: new Date() },
+    });
+
+    this.logger.log(`[YooKassa] Premium granted for user ${user.id} (${user.email}) after payment ${yookassaPaymentId}, plan ${planId}, ${days} days`);
+  }
+
+  /**
+   * Демо-оплата отключена при включённой ЮKassa. Выдача подписки только после реальной оплаты.
    */
   async grantDemoSubscription(emailOrId: string, planId: string) {
+    if (this.getYooKassaAuth()) {
+      throw new BadRequestException(
+        'Демо-оплата отключена. Используйте оформление подписки с оплатой через ЮKassa.',
+      );
+    }
     const plan = this.plans[planId];
     if (!plan) {
       throw new BadRequestException('Неверный тариф');

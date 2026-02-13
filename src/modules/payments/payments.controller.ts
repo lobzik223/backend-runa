@@ -15,6 +15,37 @@ export class PaymentsController {
     };
   }
 
+  /** Создание платежа ЮKassa: возвращает confirmation_url для редиректа. Оплата обязательна, подписка выдаётся после webhook payment.succeeded. */
+  @Post('create')
+  async createPayment(
+    @Headers('x-runa-site-key') siteKey: string,
+    @Body()
+    body: {
+      planId: string;
+      emailOrId: string;
+      returnUrl: string;
+      cancelUrl?: string;
+    },
+  ) {
+    this.paymentsService.validateSiteKey(siteKey);
+    if (!body.planId || !body.returnUrl) {
+      throw new BadRequestException('Укажите тариф и URL возврата после оплаты');
+    }
+    return this.paymentsService.createYooKassaPayment(
+      body.planId,
+      body.emailOrId,
+      body.returnUrl,
+      body.cancelUrl || body.returnUrl,
+    );
+  }
+
+  /** Webhook от ЮKassa: только после успешной оплаты выдаём подписку. Вызывается серверами ЮKassa. */
+  @Post('yookassa/webhook')
+  async yookassaWebhook(@Body() body: { type?: string; event?: string; object?: { id?: string } }) {
+    await this.paymentsService.handleYooKassaWebhook(body);
+    return {};
+  }
+
   @Post('demo')
   async demoPayment(
     @Headers('x-runa-site-key') siteKey: string,

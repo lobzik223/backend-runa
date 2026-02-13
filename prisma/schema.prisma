@@ -288,6 +288,23 @@ model SubscriptionEvent {
   @@map("subscription_events")
 }
 
+// Платежи с сайта через ЮKassa: только после подтверждения (webhook) выдаём подписку
+model YooKassaPayment {
+  id                 String   @id @default(uuid())
+  yookassaPaymentId  String   @unique // id платежа в ЮKassa
+  planId             String
+  emailOrId           String   // email или ID пользователя для привязки подписки
+  status              String   // PENDING | SUCCEEDED | REFUNDED | CANCELLED
+  userId              Int?     // заполняется при выдаче подписки
+  grantedAt          DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([yookassaPaymentId])
+  @@index([status])
+  @@map("yookassa_payments")
+}
+
 model PinSecurity {
   userId Int @id
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)

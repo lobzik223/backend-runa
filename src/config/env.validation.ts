@@ -38,11 +38,9 @@ const envSchema = z
   // Serper — поиск в интернете для актуальных данных в AI-чате (курсы, даты, факты)
   SERPER_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
 
-  // Robokassa
-  ROBOKASSA_MERCHANT_LOGIN: z.string().optional(),
-  ROBOKASSA_PASSWORD_1: z.string().optional(),
-  ROBOKASSA_PASSWORD_2: z.string().optional(),
-  ROBOKASSA_IS_TEST: z.preprocess((v) => v === 'true' || v === '1', z.boolean()).default(true),
+  // ЮKassa (оплата подписки с сайта). Shop ID — в личном кабинете ЮKassa
+  YOOKASSA_SHOP_ID: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  YOOKASSA_SECRET_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
 
   // Security key for site-to-backend communication
   SITE_API_KEY: z.string().min(16).default('runa-site-secret-key-change-me-in-prod'),
