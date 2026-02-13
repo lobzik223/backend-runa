@@ -143,7 +143,8 @@ export class PaymentsService {
   }
 
   /**
-   * Проверить платёж в ЮKassa и выдать подписку при status === 'succeeded'.
+   * Проверить платёж в ЮKassa и выдать подписку ТОЛЬКО при status === 'succeeded'.
+   * Строго: без оплаты подписка не выдаётся. Отмена, ошибка, pending, refund — подписку не даём.
    * Используется webhook'ом и страницей успеха (confirm-return). Идемпотентно.
    */
   async processSucceededYooKassaPayment(yookassaPaymentId: string): Promise<{ granted: boolean }> {
@@ -183,11 +184,13 @@ export class PaymentsService {
       metadata?: { planId?: string; emailOrId?: string };
     };
 
-    if (payment.status !== 'succeeded') {
-      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} status is ${payment.status}`);
+    // Строго: подписку выдаём только при успешной оплате. canceled, pending, failed, refund и т.д. — не выдаём.
+    const statusLower = String(payment.status || '').toLowerCase();
+    if (statusLower !== 'succeeded') {
+      this.logger.log(`[YooKassa] Payment ${yookassaPaymentId} status="${payment.status}" — subscription not granted`);
       await this.prisma.yooKassaPayment.update({
         where: { yookassaPaymentId },
-        data: { status: payment.status.toUpperCase().replace('-', '_') },
+        data: { status: (payment.status || 'UNKNOWN').toUpperCase().replace(/-/g, '_') },
       });
       return { granted: false };
     }
@@ -245,7 +248,8 @@ export class PaymentsService {
   }
 
   /**
-   * Обработка webhook от ЮKassa. Подписку выдаём только после подтверждения оплаты (payment.succeeded).
+   * Обработка webhook от ЮKassa. Обрабатываем только event === 'payment.succeeded'.
+   * payment.canceled, payment.waiting_for_capture и любые другие события — игнорируем, подписку не выдаём.
    */
   async handleYooKassaWebhook(body: {
     type?: string;
