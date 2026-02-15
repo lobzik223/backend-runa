@@ -68,19 +68,25 @@ export class PaymentsService {
       throw new BadRequestException('Неверный тариф');
     }
 
-    const trimmedEmailOrId = String(emailOrId).trim();
+    const trimmedEmailOrId = String(emailOrId ?? '').trim();
     if (!trimmedEmailOrId) {
-      throw new BadRequestException('Укажите Email или ID аккаунта из приложения');
+      this.logger.warn('[YooKassa] Платёж отклонён: не указана почта или ID. К оплате не переводим.');
+      throw new BadRequestException('Укажите Email или ID аккаунта из приложения. Без этого к оплате перейти нельзя.');
     }
 
-    // Строгая проверка: аккаунт должен существовать в БД (по ID или email). Платёж создаём только для существующего пользователя.
+    this.logger.log(`[YooKassa] Запрос на создание платежа: planId=${planId}, emailOrId=${trimmedEmailOrId}`);
+
+    // Жёсткая проверка: пользователь должен существовать в БД. Если нет — к оплате не переводим.
     const user = await this.findUser(trimmedEmailOrId);
     if (!user) {
-      this.logger.warn(`[YooKassa] Create payment rejected: account not found for emailOrId=${trimmedEmailOrId}`);
+      this.logger.warn(`[YooKassa] Пользователь не найден. emailOrId=${trimmedEmailOrId} — к оплате не переводим.`);
       throw new BadRequestException(
-        'Аккаунт не найден. Проверьте Email или ID аккаунта из профиля в приложении и попробуйте снова.',
+        'Аккаунт не найден. Проверьте Email или ID аккаунта из профиля в приложении. К оплате не переводим.',
       );
     }
+
+    const userEmail = user.email ?? '(без почты)';
+    this.logger.log(`[YooKassa] Пользователь найден: userId=${user.id}, email=${userEmail}. Создаём платёж planId=${planId}`);
 
     const idempotenceKey = `runa-${planId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const basicAuth = Buffer.from(`${auth.shopId}:${auth.secretKey}`).toString('base64');
@@ -116,7 +122,7 @@ export class PaymentsService {
     };
 
     if (!res.ok) {
-      this.logger.warn('[YooKassa] Create payment failed', { code: data.code, description: data.description });
+      this.logger.warn(`[YooKassa] Ошибка создания платежа: code=${data.code}, description=${data.description}, planId=${planId}, email=${userEmail}`);
       throw new BadRequestException(data.description || 'Не удалось создать платёж');
     }
 
@@ -137,7 +143,7 @@ export class PaymentsService {
       },
     });
 
-    this.logger.log(`[YooKassa] Payment created ${yookassaPaymentId} for plan ${planId}, emailOrId=${trimmedEmailOrId}`);
+    this.logger.log(`[YooKassa] Платёж создан: paymentId=${yookassaPaymentId}, planId=${planId}, userId=${user.id}, email=${userEmail}`);
 
     return { confirmationUrl, paymentId: yookassaPaymentId };
   }
@@ -210,7 +216,7 @@ export class PaymentsService {
 
     const user = await this.findUser(emailOrId);
     if (!user) {
-      this.logger.warn(`[YooKassa] User not found for emailOrId=${emailOrId}, payment ${yookassaPaymentId}`);
+      this.logger.warn(`[YooKassa] Пользователь не найден. emailOrId=${emailOrId}, paymentId=${yookassaPaymentId} — подписка не выдана.`);
       await this.prisma.yooKassaPayment.update({
         where: { yookassaPaymentId },
         data: { status: 'SUCCEEDED' },
@@ -243,7 +249,7 @@ export class PaymentsService {
       data: { status: 'SUCCEEDED', userId: user.id, grantedAt: new Date() },
     });
 
-    this.logger.log(`[YooKassa] Premium granted for user ${user.id} (${user.email}) after payment ${yookassaPaymentId}, plan ${planId}, ${days} days`);
+    this.logger.log(`[YooKassa] Подписка выдана: userId=${user.id}, email=${user.email ?? '(нет почты)'}, paymentId=${yookassaPaymentId}, planId=${planId}, days=${days}`);
     return { granted: true };
   }
 
