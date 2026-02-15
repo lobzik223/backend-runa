@@ -84,6 +84,18 @@ export class PaymentsController {
     return this.paymentsService.getPlans();
   }
 
+  /** Проверка совпадения Email и ID аккаунта (для формы на сайте). */
+  @Post('verify-account')
+  async verifyAccount(
+    @Headers('x-runa-site-key') siteKey: string,
+    @Body() body: { email?: string; accountId?: string },
+  ) {
+    this.paymentsService.validateSiteKey(siteKey);
+    const email = typeof body.email === 'string' ? body.email.trim() : '';
+    const accountId = typeof body.accountId === 'string' ? body.accountId.trim() : '';
+    return this.paymentsService.verifyAccountEmailAndId(email, accountId);
+  }
+
   /** Верификация чека Apple и активация подписки. Вызывается из приложения после покупки. */
   @Post('apple/verify')
   @UseGuards(JwtAccessGuard)

@@ -123,6 +123,10 @@ export class PaymentsService {
 
     if (!res.ok) {
       this.logger.warn(`[YooKassa] Ошибка создания платежа: code=${data.code}, description=${data.description}, planId=${planId}, email=${userEmail}`);
+      const desc = (data.description || '').toLowerCase();
+      if (desc.includes('shopid') || desc.includes('secret key') || desc.includes('reissue')) {
+        throw new BadRequestException('Оплата временно недоступна. Обратитесь в поддержку.');
+      }
       throw new BadRequestException(data.description || 'Не удалось создать платёж');
     }
 
@@ -334,6 +338,42 @@ export class PaymentsService {
       return this.prisma.user.findUnique({ where: { email: trimmed } });
     }
     return null;
+  }
+
+  private normalizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
+
+  /**
+   * Проверка совпадения почты и ID аккаунта. Для формы оплаты на сайте.
+   */
+  async verifyAccountEmailAndId(email: string, accountId: string): Promise<{ valid: boolean; message?: string }> {
+    const trimmedEmail = this.normalizeEmail(email);
+    const trimmedId = String(accountId).trim();
+    const userId = parseInt(trimmedId, 10);
+
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      return { valid: false, message: 'Введите корректный адрес электронной почты.' };
+    }
+    if (!trimmedId || Number.isNaN(userId) || userId <= 0) {
+      return { valid: false, message: 'Введите ID аккаунта из профиля в приложении (число).' };
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true },
+    });
+
+    if (!user) {
+      return { valid: false, message: 'Аккаунт с таким ID не найден. Проверьте ID в профиле приложения.' };
+    }
+
+    const userEmail = user.email ? this.normalizeEmail(user.email) : '';
+    if (userEmail !== trimmedEmail) {
+      return { valid: false, message: 'Почта не совпадает с ID вашего аккаунта. Укажите данные из профиля в приложении.' };
+    }
+
+    return { valid: true };
   }
 
   validateSiteKey(key: string) {
