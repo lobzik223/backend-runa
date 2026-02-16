@@ -14,8 +14,8 @@ const envSchema = z
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24 * 30),
 
-  // Админ-панель: отдельные секреты, чтобы токены пользователей и админов не пересекались
-  JWT_ADMIN_SECRET: z.string().min(32),
+  // Админ-панель: отдельные секреты. В проде обязательно задать свой JWT_ADMIN_SECRET в .env
+  JWT_ADMIN_SECRET: z.string().min(32).default('change-me-in-production-admin-secret-min-32-chars'),
   JWT_ADMIN_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 8), // 8 часов
 
   CORS_ORIGIN: z.string().default('*'),
