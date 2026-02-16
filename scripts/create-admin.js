@@ -9,11 +9,15 @@
  * Пример:
  *   node scripts/create-admin.js admin@runafinance.online "SecurePassword123" "Super Admin"
  *
- * В Docker:
- *   docker compose exec backend node scripts/create-admin.js admin@example.com "YourPassword"
+ * В Docker (на сервере так и запускайте — иначе нет node_modules):
+ *   docker compose -f docker-compose.prod.yml exec backend node scripts/create-admin.js admin@example.com "YourPassword" "Имя"
  */
 
-require('dotenv').config();
+try {
+  require('dotenv').config();
+} catch (_) {
+  // В Docker переменные заданы через compose; на хосте без node_modules запускайте через: docker compose exec backend node scripts/...
+}
 const { PrismaClient } = require('@prisma/client');
 const argon2 = require('argon2');
 

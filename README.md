@@ -111,16 +111,16 @@ npm run subscription:revoke -- user@example.com
 - `JWT_ADMIN_SECRET` — секрет для JWT админа (не менее 32 символов).
 - `JWT_ADMIN_TTL_SECONDS` — срок жизни токена (по умолчанию 28800 = 8 ч).
 
-**Создание первого админа** (на сервере, из папки `backend-runa`):
+**Создание первого админа** — на сервере запускайте **внутри контейнера** (на хосте часто нет `node_modules`):
 ```bash
-npm run admin:create -- <email> <пароль> [имя]
-# пример:
-npm run admin:create -- admin@runafinance.online "SecurePassword123" "Super Admin"
+docker compose -f docker-compose.prod.yml exec backend node scripts/create-admin.js <email> "<пароль>" "[имя]"
+# пример (пароль в кавычках, если есть спецсимволы):
+docker compose -f docker-compose.prod.yml exec backend node scripts/create-admin.js admin@runafinance.online "SecurePassword123" "Super Admin"
 ```
 
-В Docker:
+Локально (есть `npm install` и `.env`):
 ```bash
-docker compose -f docker-compose.prod.yml exec backend node scripts/create-admin.js admin@example.com "YourPassword"
+npm run admin:create -- <email> <пароль> [имя]
 ```
 
 **Вход в панель:** `POST /api/admin/auth/login` с телом `{ "email", "password" }`. Ответ: `{ "accessToken", "admin": { "id", "email", "name", "role" } }`. Дальнейшие запросы к `/api/admin/*` — с заголовком `Authorization: Bearer <accessToken>`.
