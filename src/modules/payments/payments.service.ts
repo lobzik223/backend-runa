@@ -65,12 +65,15 @@ export class PaymentsService {
 
     const plan = this.plans[planId];
     if (!plan) {
-      throw new BadRequestException('Неверный тариф');
+      this.logger.warn(`[YooKassa] 400: неверный тариф planId="${planId}". Допустимые: ${Object.keys(this.plans).join(', ')}`);
+      throw new BadRequestException(
+        `Неверный тариф. Укажите один из: ${Object.keys(this.plans).join(', ')}`,
+      );
     }
 
     const trimmedEmailOrId = String(emailOrId ?? '').trim();
     if (!trimmedEmailOrId) {
-      this.logger.warn('[YooKassa] Платёж отклонён: не указана почта или ID. К оплате не переводим.');
+      this.logger.warn('[YooKassa] 400: не указана почта или ID (emailOrId/email пустой)');
       throw new BadRequestException('Укажите Email или ID аккаунта из приложения. Без этого к оплате перейти нельзя.');
     }
 
@@ -79,7 +82,7 @@ export class PaymentsService {
     // Жёсткая проверка: пользователь должен существовать в БД. Если нет — к оплате не переводим.
     const user = await this.findUser(trimmedEmailOrId);
     if (!user) {
-      this.logger.warn(`[YooKassa] Пользователь не найден. emailOrId=${trimmedEmailOrId} — к оплате не переводим.`);
+      this.logger.warn(`[YooKassa] 400: пользователь не найден в БД. emailOrId="${trimmedEmailOrId}" — запрос к ЮKassa не отправляется.`);
       throw new BadRequestException(
         'Аккаунт не найден. Проверьте Email или ID аккаунта из профиля в приложении. К оплате не переводим.',
       );

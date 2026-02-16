@@ -50,6 +50,7 @@ async function bootstrap() {
       const prefix = env.API_PREFIX.replace(/^\//, '');
       const healthPath = `/${prefix}/health`;
       const paymentsPath = `/${prefix}/payments`;
+      const adminPath = `/${prefix}/admin`;
       // Иконки акций (SVG) — открыты для загрузки в приложении
       if (reqPath.startsWith('/assets/icons')) return next();
       // GET /api/health и GET /api/health/config — открыты (проверка доступности и конфиг приложения)
@@ -63,6 +64,8 @@ async function bootstrap() {
       if (reqPath.startsWith(healthPath)) return next();
       // Платежи с сайта — проверяются по x-runa-site-key в контроллере (CORS разрешает runafinance.online)
       if (reqPath.startsWith(paymentsPath)) return next();
+      // Админ-панель: вход по логину/паролю, остальные эндпоинты — по JWT админа (отдельная защита)
+      if (reqPath.startsWith(adminPath)) return next();
       const key = req.headers['x-runa-app-key'];
       if (key !== env.APP_KEY) {
         return res.status(401).json({ statusCode: 401, message: 'Unauthorized' });

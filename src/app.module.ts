@@ -18,6 +18,7 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { GoalsModule } from './modules/goals/goals.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { DataRetentionModule } from './modules/data-retention/data-retention.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { env } from './config/env.validation';
 
 @Module({
@@ -47,6 +48,7 @@ import { env } from './config/env.validation';
     SubscriptionsModule,
     PaymentsModule,
     GoalsModule,
+    AdminModule,
   ],
 })
 export class AppModule {}

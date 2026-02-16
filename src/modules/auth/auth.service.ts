@@ -756,16 +756,22 @@ export class AuthService {
         deletionRequestedAt: true,
         scheduledDeleteAt: true,
         restoreUntil: true,
+        blockedUntil: true,
+        blockReason: true,
       },
     });
 
     if (!user) throw new UnauthorizedException('Неверный email или пароль');
     if (!user.passwordHash) throw new UnauthorizedException('Неверный email или пароль');
 
+    const now = new Date();
+    if (user.blockedUntil && user.blockedUntil.getTime() > now.getTime()) {
+      throw new UnauthorizedException('Аккаунт заблокирован. Причина: ' + (user.blockReason || 'Не указана'));
+    }
+
     const ok = await argon2.verify(user.passwordHash, input.password);
     if (!ok) throw new UnauthorizedException('Неверный email или пароль');
 
-    const now = new Date();
     if (user.deletionRequestedAt && user.scheduledDeleteAt && user.scheduledDeleteAt.getTime() > now.getTime()) {
       const restoreUntil = user.restoreUntil ? user.restoreUntil.getTime() : 0;
       const daysLeftRestore = Math.max(0, Math.ceil((restoreUntil - now.getTime()) / (24 * 60 * 60 * 1000)));
@@ -1011,12 +1017,18 @@ export class AuthService {
         createdAt: true,
         trialUntil: true,
         premiumUntil: true,
+        blockedUntil: true,
+        blockReason: true,
         subscription: {
           select: { status: true, store: true, currentPeriodEnd: true },
         },
       },
     });
     if (!user) throw new UnauthorizedException('Пользователь не найден');
+    const now = new Date();
+    if (user.blockedUntil && user.blockedUntil.getTime() > now.getTime()) {
+      throw new UnauthorizedException('Аккаунт заблокирован. Причина: ' + (user.blockReason || 'Не указана'));
+    }
 
     const referralCode = await this.ensureUserReferralCode(userId);
 

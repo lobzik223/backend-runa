@@ -14,6 +14,10 @@ const envSchema = z
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   JWT_REFRESH_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24 * 30),
 
+  // Админ-панель: отдельные секреты, чтобы токены пользователей и админов не пересекались
+  JWT_ADMIN_SECRET: z.string().min(32),
+  JWT_ADMIN_TTL_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 8), // 8 часов
+
   CORS_ORIGIN: z.string().default('*'),
   THROTTLE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(30),

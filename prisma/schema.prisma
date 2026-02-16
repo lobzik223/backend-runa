@@ -105,6 +105,10 @@ model User {
   scheduledDeleteAt   DateTime?
   restoreUntil        DateTime?
 
+  // Блокировка только через админ-панель (SUPER_ADMIN). До истечения blockedUntil вход запрещён.
+  blockedUntil DateTime?
+  blockReason  String?  @db.Text
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   nameUpdatedAt   DateTime  @default(now())
@@ -296,12 +300,15 @@ model YooKassaPayment {
   emailOrId           String   // email или ID пользователя для привязки подписки
   status              String   // PENDING | SUCCEEDED | REFUNDED | CANCELLED
   userId              Int?     // заполняется при выдаче подписки
+  promoCodeId         String?  // если оплата по промокоду
+  promoCode           PromoCode? @relation(fields: [promoCodeId], references: [id], onDelete: SetNull)
   grantedAt          DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   @@index([yookassaPaymentId])
   @@index([status])
+  @@index([promoCodeId])
   @@map("yookassa_payments")
 }
 
@@ -681,12 +688,49 @@ model AiInsight {
   @@map("ai_insights")
 }
 
-// Админ-аккаунты для CLI и опасных операций. Не связаны с User.
+enum AdminRole {
+  SUPER_ADMIN
+}
+
+// Админ-аккаунты для панели. Регистрация только через CLI. Не связаны с User.
 model Admin {
-  id           Int      @id @default(autoincrement())
-  email        String   @unique
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
   passwordHash String
-  createdAt    DateTime @default(now())
+  name         String?   // Отображаемое имя (например "Super Admin")
+  role         AdminRole @default(SUPER_ADMIN)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@map("admins")
+}
+
+// Отчёты админов (подписки, блокировки). Хранятся 30 дней, затем удаляются.
+model AdminReport {
+  id          String   @id @default(uuid())
+  adminId     Int
+  category    String   // 'subscription_grant' | 'subscription_revoke' | 'block' | 'unblock' | ...
+  payload     Json     // { userId, reason, days, ... }
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([adminId, createdAt])
+  @@map("admin_reports")
+}
+
+// Промокоды админ-панели: скидка в рублях на тариф, срок действия, источник (YouTube, TG и т.д.)
+model PromoCode {
+  id            String   @id @default(uuid())
+  code          String   @unique   // например RUNAPROMO
+  name          String   // Название источника: YouTube, ТГ-канал, др.
+  discountRubles Int     // Скидка в рублях на подписку
+  validFrom     DateTime @default(now())
+  validUntil    DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  payments      YooKassaPayment[]
+  @@index([code])
+  @@index([validUntil])
+  @@map("promo_codes")
 }

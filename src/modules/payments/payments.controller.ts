@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Headers, BadRequestException, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Body, Headers, BadRequestException, UseGuards, Logger } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -6,6 +6,8 @@ import { JwtAccessPayload } from '../auth/types/jwt-payload';
 
 @Controller('payments')
 export class PaymentsController {
+  private readonly logger = new Logger(PaymentsController.name);
+
   constructor(private readonly paymentsService: PaymentsService) {}
 
   @Get('config')
@@ -21,26 +23,31 @@ export class PaymentsController {
     @Headers('x-runa-site-key') siteKey: string,
     @Body()
     body: {
-      planId: string;
-      emailOrId: string;
-      returnUrl: string;
+      planId?: string;
+      emailOrId?: string;
+      email?: string;
+      returnUrl?: string;
+      return_url?: string;
       cancelUrl?: string;
+      cancel_url?: string;
     },
   ) {
     this.paymentsService.validateSiteKey(siteKey);
-    if (!body.planId || !body.returnUrl) {
-      throw new BadRequestException('Укажите тариф и URL возврата после оплаты');
+    // Поддержка и camelCase, и snake_case для совместимости с разными фронтами
+    const planId = typeof body.planId === 'string' ? body.planId.trim() : '';
+    const returnUrl = typeof body.returnUrl === 'string' ? body.returnUrl.trim() : (typeof (body as any).return_url === 'string' ? (body as any).return_url.trim() : '');
+    const cancelUrl = typeof body.cancelUrl === 'string' ? body.cancelUrl.trim() : (typeof (body as any).cancel_url === 'string' ? (body as any).cancel_url.trim() : '') || returnUrl;
+    const emailOrId = (typeof body.emailOrId === 'string' ? body.emailOrId : typeof body.email === 'string' ? body.email : '').trim();
+
+    this.logger.log(`[payments/create] body keys: ${Object.keys(body || {}).join(', ') || '(empty)'}, planId=${planId || '(empty)'}, returnUrl=${returnUrl ? 'ok' : '(empty)'}, emailOrId=${emailOrId ? '***' : '(empty)'}`);
+
+    if (!planId || !returnUrl) {
+      throw new BadRequestException('Укажите тариф (planId) и URL возврата после оплаты (returnUrl или return_url)');
     }
-    const emailOrId = typeof body.emailOrId === 'string' ? body.emailOrId.trim() : '';
     if (!emailOrId) {
-      throw new BadRequestException('Укажите Email или ID аккаунта из приложения. Без этого к оплате перейти нельзя.');
+      throw new BadRequestException('Укажите Email или ID аккаунта из приложения (emailOrId или email). Без этого к оплате перейти нельзя.');
     }
-    return this.paymentsService.createYooKassaPayment(
-      body.planId,
-      emailOrId,
-      body.returnUrl,
-      body.cancelUrl || body.returnUrl,
-    );
+    return this.paymentsService.createYooKassaPayment(planId, emailOrId, returnUrl, cancelUrl);
   }
 
   /** Webhook от ЮKassa: только после успешной оплаты выдаём подписку. Вызывается серверами ЮKassa. */

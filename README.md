@@ -103,6 +103,30 @@ npm run subscription:grant -- user@example.com 365
 npm run subscription:revoke -- user@example.com
 ```
 
+## Админ-панель
+
+Аккаунты админов **отдельные** от пользователей приложения. Регистрация **только через CLI** на сервере.
+
+**Переменные в `.env`:**
+- `JWT_ADMIN_SECRET` — секрет для JWT админа (не менее 32 символов).
+- `JWT_ADMIN_TTL_SECONDS` — срок жизни токена (по умолчанию 28800 = 8 ч).
+
+**Создание первого админа** (на сервере, из папки `backend-runa`):
+```bash
+npm run admin:create -- <email> <пароль> [имя]
+# пример:
+npm run admin:create -- admin@runafinance.online "SecurePassword123" "Super Admin"
+```
+
+В Docker:
+```bash
+docker compose -f docker-compose.prod.yml exec backend node scripts/create-admin.js admin@example.com "YourPassword"
+```
+
+**Вход в панель:** `POST /api/admin/auth/login` с телом `{ "email", "password" }`. Ответ: `{ "accessToken", "admin": { "id", "email", "name", "role" } }`. Дальнейшие запросы к `/api/admin/*` — с заголовком `Authorization: Bearer <accessToken>`.
+
+Блокировки пользователей и выдача/снятие подписок из панели доступны только роли **SUPER_ADMIN**. Блокировка не сбрасывается при перезапуске бэкенда.
+
 ## Endpoints (MVP)
 
 - `GET /health`
