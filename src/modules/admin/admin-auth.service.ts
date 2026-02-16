@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   Logger,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
@@ -29,45 +30,58 @@ export class AdminAuthService {
     accessToken: string;
     admin: { id: number; email: string; name: string | null; role: string };
   }> {
-    const normalizedEmail = this.normalizeEmail(email);
-    const admin = await this.prisma.admin.findUnique({
-      where: { email: normalizedEmail },
-    });
+    try {
+      const normalizedEmail = this.normalizeEmail(email);
+      const admin = await this.prisma.admin.findUnique({
+        where: { email: normalizedEmail },
+      });
 
-    if (!admin) {
-      this.logger.warn(`[Admin] Failed login attempt: email=${normalizedEmail} (not found)`);
-      throw new UnauthorizedException('Неверный email или пароль');
-    }
+      if (!admin) {
+        this.logger.warn(`[Admin] Failed login attempt: email=${normalizedEmail} (not found)`);
+        throw new UnauthorizedException('Неверный email или пароль');
+      }
 
-    const valid = await argon2.verify(admin.passwordHash, password);
-    if (!valid) {
-      this.logger.warn(`[Admin] Failed login attempt: email=${normalizedEmail} (wrong password)`);
-      throw new UnauthorizedException('Неверный email или пароль');
-    }
+      const valid = await argon2.verify(admin.passwordHash, password);
+      if (!valid) {
+        this.logger.warn(`[Admin] Failed login attempt: email=${normalizedEmail} (wrong password)`);
+        throw new UnauthorizedException('Неверный email или пароль');
+      }
 
-    const payload: AdminJwtPayload = {
-      sub: admin.id,
-      email: admin.email,
-      role: admin.role,
-      typ: 'admin',
-    };
-
-    const accessToken = await this.jwt.signAsync(payload, {
-      secret: env.JWT_ADMIN_SECRET,
-      expiresIn: env.JWT_ADMIN_TTL_SECONDS,
-    });
-
-    this.logger.log(`[Admin] Login success: id=${admin.id} email=${admin.email} role=${admin.role}`);
-
-    return {
-      accessToken,
-      admin: {
-        id: admin.id,
+      const role = (admin as { role?: string }).role ?? 'SUPER_ADMIN';
+      const payload: AdminJwtPayload = {
+        sub: admin.id,
         email: admin.email,
-        name: admin.name ?? null,
-        role: admin.role,
-      },
-    };
+        role: role as 'SUPER_ADMIN',
+        typ: 'admin',
+      };
+
+      const secret = env.JWT_ADMIN_SECRET;
+      if (!secret || secret.length < 32) {
+        this.logger.error('[Admin] JWT_ADMIN_SECRET не задан или короче 32 символов');
+        throw new InternalServerErrorException('Ошибка конфигурации входа. Обратитесь к администратору.');
+      }
+
+      const accessToken = await this.jwt.signAsync(payload, {
+        secret,
+        expiresIn: env.JWT_ADMIN_TTL_SECONDS,
+      });
+
+      this.logger.log(`[Admin] Login success: id=${admin.id} email=${admin.email} role=${role}`);
+
+      return {
+        accessToken,
+        admin: {
+          id: admin.id,
+          email: admin.email,
+          name: (admin as { name?: string | null }).name ?? null,
+          role,
+        },
+      };
+    } catch (err) {
+      if (err instanceof UnauthorizedException) throw err;
+      this.logger.error(`[Admin] Login error: ${err instanceof Error ? err.message : String(err)}`, err instanceof Error ? err.stack : undefined);
+      throw new InternalServerErrorException('Ошибка при входе. Попробуйте позже или обратитесь к администратору.');
+    }
   }
 
   /**
