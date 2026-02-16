@@ -20,7 +20,8 @@
     "push:send": "ts-node -r tsconfig-paths/register src/scripts/send-push.ts",
     "push:send:prod": "node dist/scripts/send-push.js",
     "db:delete-all-users": "node scripts/delete-all-users.js",
-    "admin:create": "node scripts/create-admin.js"
+    "admin:create": "node scripts/create-admin.js",
+    "admin:delete": "node scripts/delete-admin.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.11.0",

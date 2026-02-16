@@ -11,7 +11,7 @@ import { env } from './config/env.validation';
 async function bootstrap() {
   const corsOrigins = env.CORS_ORIGIN === '*'
     ? true
-    : [...env.CORS_ORIGIN.split(',').map((o) => o.trim()), 'https://runafinance.online'].filter(Boolean);
+    : [...env.CORS_ORIGIN.split(',').map((o) => o.trim()), 'https://runafinance.online', 'https://panel.runafinance.online'].filter(Boolean);
   const app = await NestFactory.create(AppModule, {
     cors: {
       origin: corsOrigins,

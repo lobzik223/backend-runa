@@ -32,6 +32,11 @@ export class AdminAuthService {
   }> {
     try {
       const normalizedEmail = this.normalizeEmail(email);
+      const passwordClean = typeof password === 'string' ? password.trim() : '';
+      if (!passwordClean) {
+        this.logger.warn(`[Admin] Failed login attempt: email=${normalizedEmail} (empty password)`);
+        throw new UnauthorizedException('Неверный email или пароль');
+      }
       const admin = await this.prisma.admin.findUnique({
         where: { email: normalizedEmail },
       });
@@ -41,7 +46,7 @@ export class AdminAuthService {
         throw new UnauthorizedException('Неверный email или пароль');
       }
 
-      const valid = await argon2.verify(admin.passwordHash, password);
+      const valid = await argon2.verify(admin.passwordHash, passwordClean);
       if (!valid) {
         this.logger.warn(`[Admin] Failed login attempt: email=${normalizedEmail} (wrong password)`);
         throw new UnauthorizedException('Неверный email или пароль');
