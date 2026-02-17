@@ -17,6 +17,7 @@ export class AdminPaymentsController {
     body: {
       planId?: string;
       emailOrId?: string;
+      email?: string;
       promoCodeId?: string;
       returnUrl?: string;
       cancelUrl?: string;
