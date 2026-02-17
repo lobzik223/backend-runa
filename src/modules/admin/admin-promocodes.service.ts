@@ -73,13 +73,25 @@ export class AdminPromoCodesService {
       totalAmount += Number(p.amountPaid ?? 0);
     }
     const usersCount = new Set(succeeded.map((p) => p.userId).filter(Boolean)).size;
+    const byPlanArray = [
+      { planId: '1month', count: byPlan['1month'] ?? 0 },
+      { planId: '6months', count: byPlan['6months'] ?? 0 },
+      { planId: '1year', count: byPlan['1year'] ?? 0 },
+    ];
     return {
       code: promo.code,
       usersCount,
-      byPlan,
+      byPlan: byPlanArray,
       totalAmountRub: Math.round(totalAmount * 100) / 100,
       paymentsCount: succeeded.length,
     };
+  }
+
+  async delete(promoId: string) {
+    const promo = await this.prisma.promoCode.findUnique({ where: { id: promoId } });
+    if (!promo) throw new BadRequestException('Промокод не найден');
+    await this.prisma.promoCode.delete({ where: { id: promoId } });
+    return { success: true };
   }
 
   private toResponse(p: { id: string; code: string; name: string; discountType: string; discountValue: number; validFrom: Date; validUntil: Date; createdAt: Date; _count?: { payments: number } }) {

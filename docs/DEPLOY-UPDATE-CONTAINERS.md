@@ -4,6 +4,41 @@
 
 ---
 
+## Команды для сборки (билд)
+
+**Если деплоишь через Docker** — на сервере **не нужно** вручную запускать `npm ci`, `prisma generate`, `npm run build`. Всё это уже делается **внутри образа** по Dockerfile при `docker build`. Достаточно:
+
+```bash
+cd /путь/к/backend-runa
+docker compose -f docker-compose.prod.yml build --no-cache backend
+docker compose -f docker-compose.prod.yml up -d backend
+```
+
+Убедись, что в каталоге `backend-runa` лежит актуальный код (в т.ч. папка `prisma/` с миграциями) — он попадёт в образ при сборке.
+
+---
+
+**Бэкенд без Docker** (например, проверить сборку на ПК):
+
+```bash
+cd backend-runa
+npm ci
+npx prisma generate
+npm run build
+```
+
+**Панель (админка)** — не в контейнере, собирается на хосте и файлы копируются в nginx:
+
+```bash
+cd panel-runa
+npm ci
+npm run build
+sudo cp -r dist/* /var/www/panel-runa/
+sudo chown -R www-data:www-data /var/www/panel-runa
+```
+
+---
+
 ## Что делать по порядку
 
 ### 1. Подключиться к серверу и перейти в каталог бэкенда

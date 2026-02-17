@@ -25,6 +25,7 @@ export class AdminUsersService {
         subscription: {
           select: {
             status: true,
+            currentPeriodStart: true,
             currentPeriodEnd: true,
             productId: true,
             store: true,
@@ -54,6 +55,7 @@ export class AdminUsersService {
       subscription: user.subscription
         ? {
             ...user.subscription,
+            currentPeriodStart: user.subscription.currentPeriodStart?.toISOString() ?? null,
             currentPeriodEnd: user.subscription.currentPeriodEnd?.toISOString() ?? null,
           }
         : null,
