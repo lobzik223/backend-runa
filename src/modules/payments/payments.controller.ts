@@ -30,16 +30,17 @@ export class PaymentsController {
       return_url?: string;
       cancelUrl?: string;
       cancel_url?: string;
+      promoCode?: string;
+      promoCodeId?: string;
     },
   ) {
     this.paymentsService.validateSiteKey(siteKey);
-    // Поддержка и camelCase, и snake_case для совместимости с разными фронтами
     const planId = typeof body.planId === 'string' ? body.planId.trim() : '';
     const returnUrl = typeof body.returnUrl === 'string' ? body.returnUrl.trim() : (typeof (body as any).return_url === 'string' ? (body as any).return_url.trim() : '');
     const cancelUrl = typeof body.cancelUrl === 'string' ? body.cancelUrl.trim() : (typeof (body as any).cancel_url === 'string' ? (body as any).cancel_url.trim() : '') || returnUrl;
     const emailOrId = (typeof body.emailOrId === 'string' ? body.emailOrId : typeof body.email === 'string' ? body.email : '').trim();
-
-    this.logger.log(`[payments/create] body keys: ${Object.keys(body || {}).join(', ') || '(empty)'}, planId=${planId || '(empty)'}, returnUrl=${returnUrl ? 'ok' : '(empty)'}, emailOrId=${emailOrId ? '***' : '(empty)'}`);
+    const promoCode = typeof body.promoCode === 'string' ? body.promoCode.trim() : undefined;
+    const promoCodeId = typeof body.promoCodeId === 'string' ? body.promoCodeId.trim() : undefined;
 
     if (!planId || !returnUrl) {
       throw new BadRequestException('Укажите тариф (planId) и URL возврата после оплаты (returnUrl или return_url)');
@@ -47,7 +48,18 @@ export class PaymentsController {
     if (!emailOrId) {
       throw new BadRequestException('Укажите Email или ID аккаунта из приложения (emailOrId или email). Без этого к оплате перейти нельзя.');
     }
-    return this.paymentsService.createYooKassaPayment(planId, emailOrId, returnUrl, cancelUrl);
+    return this.paymentsService.createYooKassaPayment(planId, emailOrId, returnUrl, cancelUrl, promoCodeId, promoCode);
+  }
+
+  /** Валидация промокода для сайта: активен ли, цены по тарифам со скидкой. Заголовок x-runa-site-key обязателен. */
+  @Post('validate-promo')
+  async validatePromo(
+    @Headers('x-runa-site-key') siteKey: string,
+    @Body() body: { code?: string },
+  ) {
+    this.paymentsService.validateSiteKey(siteKey);
+    const code = typeof body.code === 'string' ? body.code.trim() : '';
+    return this.paymentsService.validatePromo(code);
   }
 
   /** Webhook от ЮKassa: только после успешной оплаты выдаём подписку. Вызывается серверами ЮKassa. */

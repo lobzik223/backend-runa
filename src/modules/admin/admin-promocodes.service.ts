@@ -12,22 +12,19 @@ export class AdminPromoCodesService {
         _count: { select: { payments: true } },
       },
     });
-    return list.map((p) => ({
-      id: p.id,
-      code: p.code,
-      name: p.name,
-      discountRubles: p.discountRubles,
-      validFrom: p.validFrom.toISOString(),
-      validUntil: p.validUntil.toISOString(),
-      createdAt: p.createdAt.toISOString(),
-      paymentsCount: p._count.payments,
-    }));
+    return list.map((p) => this.toResponse({ ...p, _count: p._count }));
   }
 
-  async create(dto: { code: string; name: string; discountRubles: number; validUntil: string }) {
+  async create(dto: { code: string; name: string; discountType: string; discountValue: number; validUntil: string }) {
     const code = String(dto.code ?? '').trim().toUpperCase();
     const name = String(dto.name ?? '').trim();
-    const discountRubles = Math.max(0, Math.floor(Number(dto.discountRubles) || 0));
+    const discountType = String(dto.discountType ?? 'RUB').toUpperCase() === 'PERCENT' ? 'PERCENT' : 'RUB';
+    let discountValue: number;
+    if (discountType === 'PERCENT') {
+      discountValue = Math.max(1, Math.min(100, Math.floor(Number(dto.discountValue) || 0)));
+    } else {
+      discountValue = Math.max(0, Math.floor(Number(dto.discountValue) || 0));
+    }
     const validUntil = new Date(dto.validUntil);
 
     if (!code || code.length < 2) {
@@ -49,18 +46,53 @@ export class AdminPromoCodesService {
       data: {
         code,
         name,
-        discountRubles,
+        discountType,
+        discountValue,
         validUntil,
       },
     });
+    return this.toResponse(created);
+  }
+
+  async getStats(promoId: string) {
+    const promo = await this.prisma.promoCode.findUnique({
+      where: { id: promoId },
+      include: {
+        payments: {
+          where: { status: 'SUCCEEDED' },
+          select: { planId: true, userId: true, amountPaid: true },
+        },
+      },
+    });
+    if (!promo) throw new BadRequestException('Промокод не найден');
+    const succeeded = promo.payments;
+    const byPlan: Record<string, number> = { '1month': 0, '6months': 0, '1year': 0 };
+    let totalAmount = 0;
+    for (const p of succeeded) {
+      byPlan[p.planId] = (byPlan[p.planId] ?? 0) + 1;
+      totalAmount += Number(p.amountPaid ?? 0);
+    }
+    const usersCount = new Set(succeeded.map((p) => p.userId).filter(Boolean)).size;
     return {
-      id: created.id,
-      code: created.code,
-      name: created.name,
-      discountRubles: created.discountRubles,
-      validFrom: created.validFrom.toISOString(),
-      validUntil: created.validUntil.toISOString(),
-      createdAt: created.createdAt.toISOString(),
+      code: promo.code,
+      usersCount,
+      byPlan,
+      totalAmountRub: Math.round(totalAmount * 100) / 100,
+      paymentsCount: succeeded.length,
+    };
+  }
+
+  private toResponse(p: { id: string; code: string; name: string; discountType: string; discountValue: number; validFrom: Date; validUntil: Date; createdAt: Date; _count?: { payments: number } }) {
+    return {
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      discountType: p.discountType,
+      discountValue: p.discountValue,
+      validFrom: p.validFrom.toISOString(),
+      validUntil: p.validUntil.toISOString(),
+      createdAt: p.createdAt.toISOString(),
+      paymentsCount: (p as { _count?: { payments: number } })._count?.payments ?? 0,
     };
   }
 }

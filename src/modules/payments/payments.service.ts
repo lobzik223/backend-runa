@@ -43,14 +43,45 @@ export class PaymentsService {
     return Object.values(this.plans);
   }
 
+  /**
+   * Валидация промокода для сайта: активен ли, цены по тарифам со скидкой.
+   * Не проверяет одноразовость (это при создании платежа).
+   */
+  async validatePromo(code: string): Promise<{
+    valid: boolean;
+    message?: string;
+    discountType?: string;
+    discountValue?: number;
+    prices?: { '1month': number; '6months': number; '1year': number };
+  }> {
+    const c = String(code ?? '').trim().toUpperCase();
+    if (!c) return { valid: false, message: 'Введите промокод' };
+    const promo = await this.prisma.promoCode.findUnique({ where: { code: c } });
+    if (!promo) return { valid: false, message: 'Промокод не найден' };
+    const now = new Date();
+    if (now < promo.validFrom) return { valid: false, message: 'Промокод ещё не действует' };
+    if (now > promo.validUntil) return { valid: false, message: 'Промокод истёк' };
+    const prices: { '1month': number; '6months': number; '1year': number } = { '1month': 0, '6months': 0, '1year': 0 };
+    for (const [planId, plan] of Object.entries(this.plans)) {
+      const discount =
+        promo.discountType === 'PERCENT' ? (plan.price * promo.discountValue) / 100 : promo.discountValue;
+      prices[planId as keyof typeof prices] = Math.max(0, Math.round((plan.price - discount) * 100) / 100);
+    }
+    return {
+      valid: true,
+      discountType: promo.discountType,
+      discountValue: promo.discountValue,
+      prices,
+    };
+  }
+
   getSubscriptionSiteUrl() {
     return process.env.SUBSCRIPTION_SITE_URL || 'https://runafinance.online/premium';
   }
 
   /**
    * Создать платёж в ЮKassa и сохранить запись в БД (PENDING).
-   * Возвращает confirmation_url для редиректа пользователя.
-   * promoCodeId — опционально; скидка вычитается из суммы, запись связывается с промокодом.
+   * promoCodeId или promoCode (строка кода) — опционально. Скидка в % или ₽, один раз на одного пользователя.
    */
   async createYooKassaPayment(
     planId: string,
@@ -58,6 +89,7 @@ export class PaymentsService {
     returnUrl: string,
     cancelUrl: string,
     promoCodeId?: string,
+    promoCode?: string,
   ): Promise<{ confirmationUrl: string; paymentId: string }> {
     const auth = this.getYooKassaAuth();
     if (!auth) {
@@ -95,14 +127,28 @@ export class PaymentsService {
 
     let amountRub = plan.price;
     let linkedPromoId: string | null = null;
-    if (promoCodeId && promoCodeId.trim()) {
-      const promo = await this.prisma.promoCode.findUnique({
-        where: { id: promoCodeId.trim() },
-      });
+    const promoIdOrCode = promoCodeId?.trim() || promoCode?.trim();
+    if (promoIdOrCode) {
+      const promo = promoCodeId
+        ? await this.prisma.promoCode.findUnique({ where: { id: promoCodeId.trim() } })
+        : await this.prisma.promoCode.findUnique({ where: { code: promoCode!.trim().toUpperCase() } });
       if (promo && new Date() >= promo.validFrom && new Date() <= promo.validUntil) {
-        amountRub = Math.max(0, plan.price - promo.discountRubles);
+        const alreadyUsed = await this.prisma.yooKassaPayment.count({
+          where: { promoCodeId: promo.id, userId: user.id, status: 'SUCCEEDED' },
+        });
+        if (alreadyUsed > 0) {
+          this.logger.warn(`[YooKassa] Пользователь ${user.id} уже использовал промокод ${promo.code}`);
+          throw new BadRequestException(
+            'Данный пользователь уже использовал этот промокод. Оплата возможна без промокода.',
+          );
+        }
+        const discount =
+          promo.discountType === 'PERCENT'
+            ? (plan.price * promo.discountValue) / 100
+            : promo.discountValue;
+        amountRub = Math.max(0, Math.round((plan.price - discount) * 100) / 100);
         linkedPromoId = promo.id;
-        this.logger.log(`[YooKassa] Промокод ${promo.code}: скидка ${promo.discountRubles} ₽, итого ${amountRub} ₽`);
+        this.logger.log(`[YooKassa] Промокод ${promo.code}: скидка ${promo.discountType === 'PERCENT' ? promo.discountValue + '%' : promo.discountValue + ' ₽'}, итого ${amountRub} ₽`);
       }
     }
 
@@ -162,6 +208,7 @@ export class PaymentsService {
         planId,
         emailOrId: trimmedEmailOrId,
         status: 'PENDING',
+        amountPaid: amountRub,
         ...(linkedPromoId ? { promoCodeId: linkedPromoId } : {}),
       },
     });
@@ -272,8 +319,32 @@ export class PaymentsService {
       data: { status: 'SUCCEEDED', userId: user.id, grantedAt: new Date() },
     });
 
+    const amountStr = existing.amountPaid != null ? ` ${Number(existing.amountPaid)} ₽` : '';
+    await this.prisma.subscriptionHistory.create({
+      data: {
+        userId: user.id,
+        action: 'payment',
+        details: `Оплата ${planId}${amountStr}`,
+      },
+    });
+    await this.keepLastSubscriptionHistory(user.id, 5);
+
     this.logger.log(`[YooKassa] Подписка выдана: userId=${user.id}, email=${user.email ?? '(нет почты)'}, paymentId=${yookassaPaymentId}, planId=${planId}, days=${days}`);
     return { granted: true };
+  }
+
+  private async keepLastSubscriptionHistory(userId: number, keep: number) {
+    const ids = await this.prisma.subscriptionHistory.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: keep,
+      select: { id: true },
+    });
+    const keepIds = ids.map((r) => r.id);
+    if (keepIds.length === 0) return;
+    await this.prisma.subscriptionHistory.deleteMany({
+      where: { userId, id: { notIn: keepIds } },
+    });
   }
 
   /**

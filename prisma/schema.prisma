@@ -133,13 +133,43 @@ model User {
 
   referralCode    ReferralCode?
   subscription    Subscription?
+  subscriptionHistory SubscriptionHistory[]
+  blockHistory        BlockHistory[]
   aiThreads       AiThread[]
   aiMessages      AiMessage[]
   aiInsights      AiInsight[]
   devices         Device[]
 
   @@index([createdAt])
+  @@index([deletionRequestedAt])
   @@map("users")
+}
+
+// История подписок пользователя (последние 5 хранятся, остальное удаляется для разгрузки БД)
+model SubscriptionHistory {
+  id        String   @id @default(uuid())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String   // granted | reduced | revoked | payment
+  details   String?  @db.Text // например "30 дн.", "Оплата 1month 400 ₽"
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("subscription_history")
+}
+
+// История блокировок (для проверки нарушений)
+model BlockHistory {
+  id           String    @id @default(uuid())
+  userId       Int
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  blockedAt    DateTime  @default(now())
+  blockedUntil DateTime?
+  reason       String?   @db.Text
+  unblockedAt  DateTime?
+
+  @@index([userId])
+  @@map("block_history")
 }
 
 model Device {
@@ -302,6 +332,7 @@ model YooKassaPayment {
   userId              Int?     // заполняется при выдаче подписки
   promoCodeId         String?  // если оплата по промокоду
   promoCode           PromoCode? @relation(fields: [promoCodeId], references: [id], onDelete: SetNull)
+  amountPaid         Decimal? @db.Decimal(10, 2) // фактическая сумма к оплате (для статистики)
   grantedAt          DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -309,6 +340,7 @@ model YooKassaPayment {
   @@index([yookassaPaymentId])
   @@index([status])
   @@index([promoCodeId])
+  @@index([userId, promoCodeId])
   @@map("yookassa_payments")
 }
 
@@ -723,7 +755,8 @@ model PromoCode {
   id            String   @id @default(uuid())
   code          String   @unique   // например RUNAPROMO
   name          String   // Название источника: YouTube, ТГ-канал, др.
-  discountRubles Int     // Скидка в рублях на подписку
+  discountType  String   @default("RUB")  // RUB | PERCENT
+  discountValue Int      // рубли или проценты (1-100)
   validFrom     DateTime @default(now())
   validUntil    DateTime
   createdAt     DateTime @default(now())

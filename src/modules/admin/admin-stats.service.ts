@@ -14,18 +14,27 @@ export class AdminStatsService {
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    const [onlineCount, subscriptionsActive, usersToday, newRegistrations, chartData] = await Promise.all([
-      this.prisma.device.count({ where: { lastSeenAt: { gte: tenMinAgo } } }),
-      this.prisma.subscription.count({
-        where: {
-          status: 'ACTIVE',
-          currentPeriodEnd: { gte: now },
-        },
-      }),
-      this.prisma.user.count({ where: { createdAt: { gte: todayStart } } }),
-      this.prisma.user.count({ where: { createdAt: { gte: weekAgo } } }),
-      this.getRegistrationsChartData(),
-    ]);
+    const [onlineCount, subscriptionsActive, usersToday, newRegistrations, chartData, deletedAccounts] =
+      await Promise.all([
+        this.prisma.device.count({ where: { lastSeenAt: { gte: tenMinAgo } } }),
+        this.prisma.subscription.count({
+          where: {
+            status: 'ACTIVE',
+            currentPeriodEnd: { gte: now },
+          },
+        }),
+        this.prisma.user.count({ where: { createdAt: { gte: todayStart } } }),
+        this.prisma.user.count({ where: { createdAt: { gte: weekAgo } } }),
+        this.getRegistrationsChartData(),
+        this.prisma.user.count({ where: { deletionRequestedAt: { not: null } } }),
+      ]);
+
+    let databaseStatus: 'ok' | 'error' = 'ok';
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch {
+      databaseStatus = 'error';
+    }
 
     return {
       usersOnline: onlineCount,
@@ -33,6 +42,11 @@ export class AdminStatsService {
       usersToday,
       newRegistrations,
       chartData,
+      deletedAccounts,
+      serverStatus: {
+        database: databaseStatus,
+        server: 'ok' as const,
+      },
     };
   }
 

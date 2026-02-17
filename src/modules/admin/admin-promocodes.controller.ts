@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AdminJwtGuard } from './guards/admin-jwt.guard';
 import { AdminPromoCodesService } from './admin-promocodes.service';
 import { CreatePromoDto } from './dto/create-promo.dto';
@@ -11,6 +11,11 @@ export class AdminPromoCodesController {
   @Get('promocodes')
   list() {
     return this.promoCodes.list();
+  }
+
+  @Get('promocodes/:id/stats')
+  getStats(@Param('id') id: string) {
+    return this.promoCodes.getStats(id);
   }
 
   @Post('promocodes')
