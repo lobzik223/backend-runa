@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AdminAuthService } from './admin-auth.service';
 import { AdminLoginDto } from './dto/admin-login.dto';
@@ -20,5 +20,11 @@ export class AdminAuthController {
   @UseGuards(AdminJwtGuard)
   async me(@CurrentAdmin() admin: AdminJwtPayload) {
     return this.adminAuth.me(admin.sub);
+  }
+
+  @Post('auth/verify-password')
+  @UseGuards(AdminJwtGuard)
+  async verifyPassword(@CurrentAdmin() admin: AdminJwtPayload, @Body() body: { password?: string }) {
+    return this.adminAuth.verifyPassword(admin.sub, body.password ?? '');
   }
 }

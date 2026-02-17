@@ -1,11 +1,17 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseIntPipe, BadRequestException } from '@nestjs/common';
 import { AdminJwtGuard } from './guards/admin-jwt.guard';
 import { AdminUsersService } from './admin-users.service';
+import { AdminAuthService } from './admin-auth.service';
+import { CurrentAdmin } from './decorators/current-admin.decorator';
+import type { AdminJwtPayload } from './admin-auth.types';
 
 @Controller('admin')
 @UseGuards(AdminJwtGuard)
 export class AdminUsersController {
-  constructor(private readonly users: AdminUsersService) {}
+  constructor(
+    private readonly users: AdminUsersService,
+    private readonly adminAuth: AdminAuthService,
+  ) {}
 
   @Get('users')
   list(
@@ -29,40 +35,61 @@ export class AdminUsersController {
   }
 
   @Post('users/:id/block')
-  block(
+  async block(
+    @CurrentAdmin() admin: AdminJwtPayload,
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { reason?: string; until?: string },
+    @Body() body: { reason?: string; until?: string; password?: string },
   ) {
+    if (!body.password?.trim()) throw new BadRequestException('Введите пароль для подтверждения');
+    await this.adminAuth.verifyPassword(admin.sub, body.password);
     const until = body.until ? new Date(body.until) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-    if (isNaN(until.getTime())) throw new BadRequestException('Некорректная дата until');
+    if (Number.isNaN(until.getTime())) throw new BadRequestException('Некорректная дата until');
     return this.users.blockUser(id, body.reason ?? 'Заблокировано администратором', until);
   }
 
   @Post('users/:id/unblock')
-  unblock(@Param('id', ParseIntPipe) id: number) {
+  async unblock(
+    @CurrentAdmin() admin: AdminJwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { password?: string },
+  ) {
+    if (!body?.password?.trim()) throw new BadRequestException('Введите пароль для подтверждения');
+    await this.adminAuth.verifyPassword(admin.sub, body.password);
     return this.users.unblockUser(id);
   }
 
   @Post('users/:id/subscription/grant')
-  grantSubscription(
+  async grantSubscription(
+    @CurrentAdmin() admin: AdminJwtPayload,
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { days?: number },
+    @Body() body: { days?: number; password?: string },
   ) {
-    const days = Math.max(1, Math.min(360, Number(body.days) || 30));
+    if (!body?.password?.trim()) throw new BadRequestException('Введите пароль для подтверждения');
+    await this.adminAuth.verifyPassword(admin.sub, body.password);
+    const days = Math.max(1, Math.min(366, Number(body.days) || 30));
     return this.users.grantSubscription(id, days);
   }
 
   @Post('users/:id/subscription/reduce')
-  reduceSubscription(
+  async reduceSubscription(
+    @CurrentAdmin() admin: AdminJwtPayload,
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { days?: number },
+    @Body() body: { days?: number; password?: string },
   ) {
+    if (!body?.password?.trim()) throw new BadRequestException('Введите пароль для подтверждения');
+    await this.adminAuth.verifyPassword(admin.sub, body.password);
     const days = Math.max(1, Math.min(360, Number(body.days) || 1));
     return this.users.reduceSubscription(id, days);
   }
 
   @Post('users/:id/subscription/revoke')
-  revokeSubscription(@Param('id', ParseIntPipe) id: number) {
+  async revokeSubscription(
+    @CurrentAdmin() admin: AdminJwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { password?: string },
+  ) {
+    if (!body?.password?.trim()) throw new BadRequestException('Введите пароль для подтверждения');
+    await this.adminAuth.verifyPassword(admin.sub, body.password);
     return this.users.revokeSubscription(id);
   }
 }

@@ -106,4 +106,17 @@ export class AdminAuthService {
       role: admin.role,
     };
   }
+
+  /**
+   * Проверка пароля текущего админа (для подтверждения критичных действий в панели).
+   */
+  async verifyPassword(adminId: number, password: string): Promise<{ valid: true }> {
+    const p = typeof password === 'string' ? password.trim() : '';
+    if (!p) throw new UnauthorizedException('Введите пароль');
+    const admin = await this.prisma.admin.findUnique({ where: { id: adminId } });
+    if (!admin) throw new UnauthorizedException('Админ не найден');
+    const valid = await argon2.verify(admin.passwordHash, p);
+    if (!valid) throw new UnauthorizedException('Неверный пароль');
+    return { valid: true };
+  }
 }
