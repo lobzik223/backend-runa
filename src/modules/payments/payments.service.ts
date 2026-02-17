@@ -50,12 +50,14 @@ export class PaymentsService {
   /**
    * Создать платёж в ЮKassa и сохранить запись в БД (PENDING).
    * Возвращает confirmation_url для редиректа пользователя.
+   * promoCodeId — опционально; скидка вычитается из суммы, запись связывается с промокодом.
    */
   async createYooKassaPayment(
     planId: string,
     emailOrId: string,
     returnUrl: string,
     cancelUrl: string,
+    promoCodeId?: string,
   ): Promise<{ confirmationUrl: string; paymentId: string }> {
     const auth = this.getYooKassaAuth();
     if (!auth) {
@@ -91,11 +93,24 @@ export class PaymentsService {
     const userEmail = user.email ?? '(без почты)';
     this.logger.log(`[YooKassa] Пользователь найден: userId=${user.id}, email=${userEmail}. Создаём платёж planId=${planId}`);
 
+    let amountRub = plan.price;
+    let linkedPromoId: string | null = null;
+    if (promoCodeId && promoCodeId.trim()) {
+      const promo = await this.prisma.promoCode.findUnique({
+        where: { id: promoCodeId.trim() },
+      });
+      if (promo && new Date() >= promo.validFrom && new Date() <= promo.validUntil) {
+        amountRub = Math.max(0, plan.price - promo.discountRubles);
+        linkedPromoId = promo.id;
+        this.logger.log(`[YooKassa] Промокод ${promo.code}: скидка ${promo.discountRubles} ₽, итого ${amountRub} ₽`);
+      }
+    }
+
     const idempotenceKey = `runa-${planId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const basicAuth = Buffer.from(`${auth.shopId}:${auth.secretKey}`).toString('base64');
 
     const body = {
-      amount: { value: String(plan.price.toFixed(2)), currency: 'RUB' },
+      amount: { value: String(amountRub.toFixed(2)), currency: 'RUB' },
       capture: true,
       confirmation: {
         type: 'redirect',
@@ -147,6 +162,7 @@ export class PaymentsService {
         planId,
         emailOrId: trimmedEmailOrId,
         status: 'PENDING',
+        ...(linkedPromoId ? { promoCodeId: linkedPromoId } : {}),
       },
     });
 
