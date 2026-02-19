@@ -65,7 +65,8 @@ export class PaymentsService {
     for (const [planId, plan] of Object.entries(this.plans)) {
       const discount =
         promo.discountType === 'PERCENT' ? (plan.price * promo.discountValue) / 100 : promo.discountValue;
-      prices[planId as keyof typeof prices] = Math.max(0, Math.round((plan.price - discount) * 100) / 100);
+      const value = Math.round((plan.price - discount) * 100) / 100;
+      prices[planId as keyof typeof prices] = Math.max(1, value); // минимум 1 ₽ для ЮKassa
     }
     return {
       valid: true,
@@ -146,7 +147,8 @@ export class PaymentsService {
           promo.discountType === 'PERCENT'
             ? (plan.price * promo.discountValue) / 100
             : promo.discountValue;
-        amountRub = Math.max(0, Math.round((plan.price - discount) * 100) / 100);
+        const withDiscount = Math.round((plan.price - discount) * 100) / 100;
+        amountRub = Math.max(1, withDiscount); // минимум 1 ₽ в платёжном запросе и в чеке
         linkedPromoId = promo.id;
         this.logger.log(`[YooKassa] Промокод ${promo.code}: скидка ${promo.discountType === 'PERCENT' ? promo.discountValue + '%' : promo.discountValue + ' ₽'}, итого ${amountRub} ₽`);
       }
@@ -155,8 +157,11 @@ export class PaymentsService {
     const idempotenceKey = `runa-${planId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const basicAuth = Buffer.from(`${auth.shopId}:${auth.secretKey}`).toString('base64');
 
+    const amountValue = Math.max(1, amountRub);
+    const amountStr = amountValue.toFixed(2);
+    const receiptCustomer = trimmedEmailOrId.includes('@') ? { customer: { email: trimmedEmailOrId } } : {};
     const body = {
-      amount: { value: String(amountRub.toFixed(2)), currency: 'RUB' },
+      amount: { value: amountStr, currency: 'RUB' },
       capture: true,
       confirmation: {
         type: 'redirect',
@@ -165,6 +170,19 @@ export class PaymentsService {
       },
       description: plan.description.slice(0, 128),
       metadata: { planId, emailOrId: trimmedEmailOrId },
+      receipt: {
+        ...receiptCustomer,
+        items: [
+          {
+            description: plan.description.slice(0, 128),
+            quantity: '1',
+            amount: { value: amountStr, currency: 'RUB' },
+            vat_code: 1,
+            payment_subject: 'service' as const,
+            payment_mode: 'full_payment' as const,
+          },
+        ],
+      },
     };
 
     const res = await fetch(`${YOOKASSA_API}/payments`, {
