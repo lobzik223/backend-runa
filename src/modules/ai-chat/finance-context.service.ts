@@ -68,6 +68,26 @@ export interface FinanceContext {
   } | null;
 }
 
+/** Минимальный контекст, если сбор данных пользователя упал — чат всё равно ответит через LLM/stub */
+export function createEmptyFinanceContext(): FinanceContext {
+  return {
+    currentMonth: { income: 0, expense: 0, net: 0 },
+    topExpenseCategories: [],
+    topIncomeCategories: [],
+    recentTransactions: [],
+    goals: [],
+    creditAccounts: [],
+    portfolio: {
+      totalCost: 0,
+      totalCurrentValue: null,
+      totalPnl: null,
+      assetCount: 0,
+    },
+    savingsRate: null,
+    exchangeRates: null,
+  };
+}
+
 @Injectable()
 export class FinanceContextService {
   constructor(private prisma: PrismaService) {}

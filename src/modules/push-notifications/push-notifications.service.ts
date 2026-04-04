@@ -266,17 +266,19 @@ export class PushNotificationsService {
     }
 
     try {
+      const expoPayload: Record<string, unknown> = {
+        to: token,
+        title: payload.title,
+        body: payload.body,
+        data: payload.data ?? undefined,
+        sound: 'default',
+        channelId: 'runa_finance_default',
+        priority: platform === 'android' ? 'high' : 'default',
+      };
       const res = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: token,
-          title: payload.title,
-          body: payload.body,
-          data: payload.data,
-          sound: 'default',
-          channelId: 'runa_finance_default',
-        }),
+        body: JSON.stringify(expoPayload),
       });
 
       const json: any = await res.json().catch(() => null);

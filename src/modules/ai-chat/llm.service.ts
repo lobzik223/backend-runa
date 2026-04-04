@@ -17,6 +17,9 @@ export interface LLMResponse {
 
 const GROK_API_URL = 'https://api.x.ai/v1/chat/completions';
 
+/** Хвост диалога для chat completions (после system). */
+export type LlmConversationTurn = { role: 'user' | 'assistant'; content: string };
+
 @Injectable()
 export class LLMService {
   private readonly logger = new Logger(LLMService.name);
@@ -25,9 +28,23 @@ export class LLMService {
   private readonly grokModel = process.env.GROK_MODEL || 'grok-4-1-fast-reasoning';
   private readonly openaiApiKey = process.env.OPENAI_API_KEY;
   private readonly openaiModel = process.env.OPENAI_MODEL || 'gpt-5-nano';
+  /** Таймаут HTTP к Grok/OpenAI (мс). Долгие ответы без лимита дают обрыв на nginx/телефоне. */
+  private readonly llmFetchTimeoutMs = Math.max(15000, Number(process.env.LLM_FETCH_TIMEOUT_MS) || 120000);
+  /** Максимум токенов в ответе (Grok/OpenAI). */
+  private readonly maxOutputTokens = Math.min(
+    8192,
+    Math.max(256, Number(process.env.LLM_MAX_OUTPUT_TOKENS) || 2048),
+  );
+  /** Креативность формулировок (0–2). Выше — разнообразнее ответы. */
+  private readonly temperature = Math.min(
+    1.5,
+    Math.max(0.2, Number(process.env.LLM_TEMPERATURE) || 0.82),
+  );
 
   constructor() {
-    this.logger.log(`[LLM Service] Grok API key: ${this.grokApiKey ? 'SET' : 'NOT SET'}, model: ${this.grokModel}`);
+    this.logger.log(
+      `[LLM Service] Grok API key: ${this.grokApiKey ? 'SET' : 'NOT SET'}, model: ${this.grokModel}, max_out=${this.maxOutputTokens}, temp=${this.temperature}`,
+    );
     this.logger.log(`[LLM Service] OPENAI_API_KEY: ${this.openaiApiKey ? 'SET' : 'NOT SET'}`);
     if (this.grokApiKey) {
       this.logger.log(`[LLM Service] ✅ Grok (xAI) настроен — общение, анализ, тактики по финансам`);
@@ -61,9 +78,16 @@ export class LLMService {
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
     preferredLanguage?: 'ru' | 'en',
+    conversationHistory: LlmConversationTurn[] = [],
   ): Promise<LLMResponse> {
     const responseLanguage = preferredLanguage ?? this.detectResponseLanguage(userMessage);
-    this.logger.log(`[LLM] responseLanguage=${responseLanguage} (preferred=${preferredLanguage ?? 'auto'})`);
+    const turns =
+      conversationHistory.length > 0
+        ? conversationHistory
+        : [{ role: 'user' as const, content: userMessage }];
+    this.logger.log(
+      `[LLM] responseLanguage=${responseLanguage} (preferred=${preferredLanguage ?? 'auto'}), historyTurns=${turns.length}`,
+    );
 
     const useGrok = !!this.grokApiKey;
     const useOpenAI = !!this.openaiApiKey;
@@ -77,17 +101,39 @@ export class LLMService {
     try {
       if (useGrok) {
         this.logger.log('[LLM] Using Grok (xAI)');
-        return await this.callGrok(userMessage, structuredOutputs, financeContext, webSearchResults, responseLanguage);
+        return await this.callGrok(
+          structuredOutputs,
+          financeContext,
+          webSearchResults,
+          responseLanguage,
+          turns,
+        );
       }
       if (useOpenAI) {
         this.logger.log('[LLM] Using OpenAI');
-        return await this.callOpenAI(userMessage, structuredOutputs, financeContext, webSearchResults, responseLanguage);
+        return await this.callOpenAI(
+          structuredOutputs,
+          financeContext,
+          webSearchResults,
+          responseLanguage,
+          turns,
+        );
       }
       return this.generateStubResponse(structuredOutputs);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`[LLM] Grok/OpenAI error: ${errMsg}`);
-      this.logger.warn('[LLM] Falling back to stub mode. Проверьте GROK_API_KEY на сервере и логи выше.');
+      const isAbort =
+        (error instanceof Error && error.name === 'AbortError') ||
+        errMsg.includes('aborted') ||
+        errMsg.includes('AbortError');
+      if (isAbort) {
+        this.logger.error(
+          `[LLM] Grok/OpenAI: таймаут или обрыв (${this.llmFetchTimeoutMs} ms). Увеличьте LLM_FETCH_TIMEOUT_MS или проверьте сеть/xAI.`,
+        );
+      } else {
+        this.logger.error(`[LLM] Grok/OpenAI error: ${errMsg}`);
+      }
+      this.logger.warn('[LLM] Falling back to stub mode. Проверьте GROK_API_KEY / OPENAI_API_KEY и логи выше.');
       return this.generateStubResponse(structuredOutputs);
     }
   }
@@ -124,8 +170,9 @@ export class LLMService {
 🌐 АКТУАЛЬНЫЕ ДАННЫЕ ИЗ ПОИСКА В ИНТЕРНЕТЕ (используй ТОЛЬКО их для фактов, дат, курсов, цифр, событий — никогда не используй свои старые знания и не придумывай примеры):
 ${webSearchResults.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}`).join('\n\n')}
 
-Для любых фактуальных вопросов (курсы, даты, цифры, события) опирайся ТОЛЬКО на этот блок и на данные пользователя ниже. Если в поиске нет ответа — честно скажи, что актуальных данных нет, и порекомендуй источник (например cbr.ru, ЦБ РФ).`
-        : '';
+Для любых фактуальных вопросов (курсы, даты, цифры, события) опирайся ТОЛЬКО на этот блок и на данные пользователя ниже. Если в поиске нет ответа — честно скажи, что актуальных данных нет, и порекомендуй источник (например cbr.ru, ЦБ РФ). Перед ответом мысленно сверь факты с этими сниппетами.`
+        : `
+🌐 ПОИСК В ИНТЕРНЕТЕ: в этом запросе сниппеты поиска не подставлялись (на сервере может быть не задан SERPER_API_KEY). Для ставок ЦБ, курсов, новостей банков и точных условий продуктов называй только данные из блока курсов ЦБ ниже и из приложения пользователя; для остального предлагай проверить официальный сайт банка или cbr.ru и не выдумывай цифры.`;
 
     return `
 Вы — RUNA, персональный финансовый ассистент в приложении RUNA Finance. Сегодняшняя дата: ${new Date().toLocaleDateString('ru-RU')}, 2026 год.
@@ -133,6 +180,19 @@ ${searchBlock}
 
 МИССИЯ:
 Помогать пользователю (целевая аудитория 18–30 лет) экономить деньги каждый день, развивать финансовую дисциплину и превращать финансовые действия в привычку с видимым результатом.
+
+КОМПЕТЕНЦИЯ (отвечай развёрнуто и по существу):
+- Банкинг и платежи: счета, карты (дебет/кредит), переводы, СБП, комиссии, лимиты, безопасность платежей.
+- Кредиты и займы: ипотека, потребительские кредиты, рефинансирование, график платежей, досрочное погашение (общие принципы, без обещаний).
+- Накопления: вклады, накопительные счета, подушка безопасности, цели — в связке с данными пользователя в приложении.
+- Регуляторика и ориентиры: ЦБ РФ, страхование вкладов (общие сведения), официальные источники для фактов.
+- Налоги и учёт личных финансов — в бытовом, понятном виде (не замена бухгалтеру/юристу).
+Если вопрос про банки/продукты/ставки — опирайся на блок поиска и официальные источники; не выдумывай ставки и условия.
+
+РАЗНООБРАЗИЕ И СТИЛЬ ДИАЛОГА:
+- Не повторяй одни и те же шаблонные фразы из ответа в ответ. Меняй структуру: то короткий ответ с буллетами, то связный абзац, то шаги 1–2–3.
+- Уточняй, если не хватает данных; предлагай гипотезы с оговоркой «если…».
+- Проявляй «живое» мышление: сравнения, оговорки по рискам, альтернативы — без канцелярита и без одного и того же вступления каждый раз.
 
 ОСНОВНЫЕ ПРАВИЛА:
 - Не давай директивных рекомендаций и не обещай доходность. Показывай последствия и альтернативы — помогай пользователю делать собственный выбор.
@@ -173,7 +233,7 @@ ${searchBlock}
 20) Расширенное сопровождение (PRO) — проактивная аналитика без директив
 
 СТИЛЬ И ТОН:
-Чёткий, спокойный, рациональный, современный, финансово грамотный. Без давления и обещаний. Персонализированный под привычки пользователя. Превращай финансовые действия в ежедневную привычку с видимым результатом.
+Чёткий, спокойный, рациональный, современный, финансово грамотный. Без давления и обещаний. Персонализированный под привычки пользователя. Превращай финансовые действия в ежедневную привычку с видимым результатом. Избегай однообразных вступлений вроде «Конечно, помогу» в каждом сообщении.
 
 ЕЖЕДНЕВНАЯ ВИЗУАЛИЗАЦИЯ ПРОГРЕССА:
 Отмечай выполненные шаги («Первый шаг выполнен», «Шаг выполнен»). Показывай сумму сэкономленного: «Ты сэкономил 350₽ за сегодня», «На этой неделе ты сэкономил 2100₽», «За месяц — X₽». Маленькие победы мотивируют — используй их.
@@ -260,16 +320,16 @@ ${structuredOutputs.length > 0
 - ПИШИТЕ БЕЗ ИСПОЛЬЗОВАНИЯ ** (ДВОЙНЫХ ЗВЕЗДОЧЕК).
 - КУРСЫ ВАЛЮТ: на вопросы про курс рубля к доллару/евро отвечай ТОЛЬКО цифрами из блока «АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ» выше; всегда указывай дату курса; никогда не подставляй курсы из своей обучающей выборки (иначе будут старые данные).
 - ФАКТЫ И ДАТЫ: для любых фактов, цифр, дат, событий используй ТОЛЬКО данные из блока «АКТУАЛЬНЫЕ ДАННЫЕ ИЗ ПОИСКА» (если он есть) и из данных пользователя; не давай примеры из головы и не используй старые знания из обучающей выборки.
-${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. All your response must be in English.' : '\nЯЗЫК ОТВЕТА: Отвечай ТОЛЬКО на русском языке. Весь твой ответ должен быть на русском.'}
+${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Cover banking, payments, credit, savings, and personal finance with the same rigor; vary phrasing and structure each time.' : '\nЯЗЫК ОТВЕТА: Отвечай ТОЛЬКО на русском языке. Весь твой ответ должен быть на русском.'}
 `.trim();
   }
 
   private async callGrok(
-    userMessage: string,
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
     responseLanguage: 'ru' | 'en' = 'ru',
+    conversationTurns: LlmConversationTurn[] = [],
   ): Promise<LLMResponse> {
     if (!this.grokApiKey) {
       throw new Error('Grok не настроен: задайте GROK_API_KEY или XAI_API_KEY в .env');
@@ -277,14 +337,16 @@ ${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. 
 
     const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults, responseLanguage);
 
+    const chatMessages = [
+      { role: 'system' as const, content: systemPrompt },
+      ...conversationTurns.map((t) => ({ role: t.role, content: t.content })),
+    ];
+
     const requestBody = {
       model: this.grokModel,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      temperature: 0.7,
-      max_tokens: 800,
+      messages: chatMessages,
+      temperature: this.temperature,
+      max_tokens: this.maxOutputTokens,
       stream: false,
     };
 
@@ -297,6 +359,7 @@ ${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. 
         'Authorization': `Bearer ${this.grokApiKey}`,
       },
       body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(this.llmFetchTimeoutMs),
     });
 
     this.logger.log(`[Grok] Response status: ${response.status} ${response.statusText}`);
@@ -339,13 +402,18 @@ ${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. 
   }
 
   private async callOpenAI(
-    userMessage: string,
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
     responseLanguage: 'ru' | 'en' = 'ru',
+    conversationTurns: LlmConversationTurn[] = [],
   ): Promise<LLMResponse> {
     const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults, responseLanguage);
+
+    const chatMessages = [
+      { role: 'system' as const, content: systemPrompt },
+      ...conversationTurns.map((t) => ({ role: t.role, content: t.content })),
+    ];
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -355,13 +423,11 @@ ${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. 
       },
       body: JSON.stringify({
         model: this.openaiModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.7,
-        max_tokens: 300,
+        messages: chatMessages,
+        temperature: this.temperature,
+        max_tokens: this.maxOutputTokens,
       }),
+      signal: AbortSignal.timeout(this.llmFetchTimeoutMs),
     });
 
     if (!response.ok) {
@@ -417,8 +483,10 @@ ${responseLanguage === 'en' ? '\nЯЗЫК ОТВЕТА: Answer ONLY in English. 
       }
     }
 
+    const fallback =
+      'Я RUNA: банкинг, бюджет, кредиты и цели — задайте вопрос конкретнее. Сейчас ответ без нейросети (проверьте GROK_API_KEY на сервере).';
     return {
-      text: parts.join('\n\n') || 'Анализ ваших финансов показывает стабильную ситуацию.',
+      text: parts.join('\n\n') || fallback,
       tokensUsed: { input: 0, output: 0 },
       model: 'stub',
     };

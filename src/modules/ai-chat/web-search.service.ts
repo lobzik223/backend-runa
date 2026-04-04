@@ -15,6 +15,10 @@ export class WebSearchService {
   private readonly logger = new Logger(WebSearchService.name);
   private readonly apiKey = process.env.SERPER_API_KEY;
   private readonly endpoint = 'https://google.serper.dev/search';
+  private readonly resultLimit = Math.min(
+    12,
+    Math.max(4, Number(process.env.SERPER_RESULT_LIMIT) || 8),
+  );
 
   constructor() {
     if (this.apiKey) {
@@ -25,13 +29,45 @@ export class WebSearchService {
   }
 
   /**
-   * Выполняет поиск по запросу. Возвращает до 8 сниппетов для контекста LLM.
+   * Обогащает запрос для лучшего покрытия банкинга/финансов и актуальных фактов.
    */
-  async search(query: string, limit = 8): Promise<WebSearchResult[]> {
+  private buildSerperQuery(raw: string): string {
+    const base = raw.trim().slice(0, 160);
+    const lower = base.toLowerCase();
+    const financeHints = [
+      'банк',
+      'кредит',
+      'вклад',
+      'ипотек',
+      'карта',
+      'счёт',
+      'счет',
+      'перевод',
+      'сбп',
+      'валют',
+      'курс',
+      'цб',
+      'накоплен',
+      'депозит',
+      'рефинанс',
+    ];
+    const looksFinance = financeHints.some((h) => lower.includes(h));
+    const tail = looksFinance
+      ? 'банки Россия финансы актуально'
+      : 'финансы личные деньги актуально';
+    const q = `${base} ${tail} 2026`.replace(/\s+/g, ' ').trim();
+    return q.slice(0, 220);
+  }
+
+  /**
+   * Выполняет поиск по запросу. Сниппеты для контекста LLM (Serper organic).
+   */
+  async search(query: string, limit?: number): Promise<WebSearchResult[]> {
     if (!this.apiKey?.trim()) {
       return [];
     }
-    const q = `${query.trim()} актуальные данные 2026`.slice(0, 200);
+    const lim = limit ?? this.resultLimit;
+    const q = this.buildSerperQuery(query);
     try {
       const res = await fetch(this.endpoint, {
         method: 'POST',
@@ -50,7 +86,7 @@ export class WebSearchService {
         organic?: Array<{ title?: string; snippet?: string; link?: string }>;
       };
       const organic = data?.organic ?? [];
-      return organic.slice(0, limit).map((o) => ({
+      return organic.slice(0, lim).map((o) => ({
         title: o.title ?? '',
         snippet: o.snippet ?? '',
         link: o.link ?? '',

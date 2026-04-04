@@ -4,8 +4,9 @@ import {
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
+import { AiRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { FinanceContextService, FinanceContext } from './finance-context.service';
+import { FinanceContextService, FinanceContext, createEmptyFinanceContext } from './finance-context.service';
 import { AIRulesEngineService, AIStructuredOutput } from './ai-rules-engine.service';
 import { LLMService } from './llm.service';
 import { ChartDataService } from './chart-data.service';
@@ -22,20 +23,43 @@ export interface ChatMessage {
   };
 }
 
+/** Статистика лимитов для клиента (Free) или флаг Premium */
+export interface ChatUsageInfo {
+  isPremium: boolean;
+  dailyMessageLimit?: number;
+  messagesUsedToday?: number;
+  messagesRemainingToday?: number;
+  totalTokenLimit?: number;
+  tokensUsedTotal?: number;
+  tokensRemainingApprox?: number;
+}
+
 export interface ChatResponse {
   message: string;
   structuredOutputs?: AIStructuredOutput[];
   chartData?: any; // DonutChartData if chart requested
   threadId: string;
   messageId: string;
+  usage?: ChatUsageInfo;
 }
 
 @Injectable()
 export class AIChatService {
   private readonly logger = new Logger(AIChatService.name);
-  private readonly FREE_TIER_MESSAGE_LIMIT = 12; // 12 обращений в день для Free
-  private readonly FREE_TIER_TOKEN_LIMIT = 20000; // 20.000 токенов общий лимит для Free
-  private readonly PREMIUM_TIER_MESSAGE_LIMIT = 1000; // effectively unlimited
+  /** Обращений к AI в день (Free). Переопределение: AI_CHAT_FREE_DAILY_MESSAGES */
+  private readonly FREE_TIER_MESSAGE_LIMIT = Math.max(
+    1,
+    Number(process.env.AI_CHAT_FREE_DAILY_MESSAGES) || 12,
+  );
+  /** Суммарный лимит токенов (Free). Переопределение: AI_CHAT_FREE_TOKEN_LIMIT */
+  private readonly FREE_TIER_TOKEN_LIMIT = Math.max(
+    1000,
+    Number(process.env.AI_CHAT_FREE_TOKEN_LIMIT) || 20000,
+  );
+  private readonly LLM_HISTORY_MAX_MESSAGES = Math.min(
+    64,
+    Math.max(4, Number(process.env.AI_CHAT_HISTORY_MAX_MESSAGES) || 32),
+  );
 
   constructor(
     private prisma: PrismaService,
@@ -102,8 +126,15 @@ export class AIChatService {
         },
       });
 
-      // Get finance context
-      const financeContext = await this.financeContextService.getFinanceContext(userId).catch(step('getFinanceContext'));
+      // Финансовый контекст: при сбое БД/таймаута — пустой контекст, чтобы чат не отваливался целиком
+      let financeContext: FinanceContext;
+      try {
+        financeContext = await this.financeContextService.getFinanceContext(userId);
+      } catch (ctxErr) {
+        const m = ctxErr instanceof Error ? ctxErr.message : String(ctxErr);
+        this.logger.warn(`[AI Chat] getFinanceContext failed, empty context: ${m}`);
+        financeContext = createEmptyFinanceContext();
+      }
 
       // Run rules engine
       let structuredOutputs = this.rulesEngine.analyze(financeContext);
@@ -132,12 +163,15 @@ export class AIChatService {
 
       const webSearchResults = await this.webSearchService.search(userMessage);
 
+      const conversationForLlm = await this.loadConversationForLlm(thread.id);
+
       const llmResponse = await this.llmService.generateResponse(
         userMessage,
         structuredOutputs,
         financeContext,
         webSearchResults,
         preferredLanguage,
+        conversationForLlm,
       ).catch(step('generateResponse'));
 
       const assistantMsg = await this.prisma.aiMessage.create({
@@ -152,12 +186,15 @@ export class AIChatService {
         },
       });
 
+      const usage = await this.buildUsageInfo(userId);
+
       return {
         message: llmResponse.text,
         structuredOutputs,
         chartData: chartData || undefined,
         threadId: thread.id,
         messageId: assistantMsg.id,
+        usage,
       };
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException) throw err;
@@ -247,6 +284,73 @@ export class AIChatService {
     return null;
   }
 
+  /**
+   * Последние сообщения треда для LLM (включая только что сохранённое сообщение пользователя).
+   * Обрезка по количеству — с начала старые отрезаются, контекст «помнит» хвост диалога.
+   */
+  private async loadConversationForLlm(
+    threadId: string,
+  ): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+    const rows = await this.prisma.aiMessage.findMany({
+      where: { threadId },
+      orderBy: { createdAt: 'desc' },
+      take: this.LLM_HISTORY_MAX_MESSAGES,
+      select: { role: true, content: true },
+    });
+    const chronological = rows.reverse();
+    const out: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const m of chronological) {
+      const text = (m.content ?? '').slice(0, 12000);
+      if (!text.trim()) continue;
+      if (m.role === AiRole.USER) {
+        out.push({ role: 'user', content: text });
+      } else if (m.role === AiRole.ASSISTANT) {
+        out.push({ role: 'assistant', content: text });
+      }
+    }
+    return out;
+  }
+
+  private async buildUsageInfo(userId: number): Promise<ChatUsageInfo> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { subscription: true },
+    });
+    if (!user) {
+      return { isPremium: false };
+    }
+    const isPremium = user.subscription?.status === 'ACTIVE';
+    if (isPremium) {
+      return { isPremium: true };
+    }
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const messagesUsedToday = await this.prisma.aiMessage.count({
+      where: {
+        userId,
+        role: 'USER',
+        createdAt: { gte: todayStart },
+      },
+    });
+    const totalTokens = await this.prisma.aiMessage.aggregate({
+      where: { userId },
+      _sum: { tokensIn: true, tokensOut: true },
+    });
+    const tokensUsed =
+      (totalTokens._sum.tokensIn || 0) + (totalTokens._sum.tokensOut || 0);
+    const dailyLimit = this.FREE_TIER_MESSAGE_LIMIT;
+    const tokenLimit = this.FREE_TIER_TOKEN_LIMIT;
+    return {
+      isPremium: false,
+      dailyMessageLimit: dailyLimit,
+      messagesUsedToday,
+      messagesRemainingToday: Math.max(0, dailyLimit - messagesUsedToday),
+      totalTokenLimit: tokenLimit,
+      tokensUsedTotal: tokensUsed,
+      tokensRemainingApprox: Math.max(0, tokenLimit - tokensUsed),
+    };
+  }
+
   private async checkMessageLimit(userId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -281,7 +385,7 @@ export class AIChatService {
 
     if (messageCount >= limit) {
       throw new BadRequestException(
-        `У вас закончился дневной лимит (12 обращений). Воспользуйтесь премиум подпиской для неограниченного общения.`,
+        `Дневной лимит AI-чата исчерпан (${limit} сообщений за сутки). Лимит обновится завтра после полуночи по времени сервера. Оформите Premium в приложении — там лимиты на сообщения сняты.`,
       );
     }
 
@@ -297,7 +401,7 @@ export class AIChatService {
     const usedTokens = (totalTokens._sum.tokensIn || 0) + (totalTokens._sum.tokensOut || 0);
     if (usedTokens >= this.FREE_TIER_TOKEN_LIMIT) {
       throw new BadRequestException(
-        `У вас закончился общий лимит токенов (20,000). Воспользуйтесь премиум подпиской для продолжения.`,
+        `Общий лимит токенов AI исчерпан (${this.FREE_TIER_TOKEN_LIMIT.toLocaleString('ru-RU')} токенов на бесплатном тарифе). Оформите Premium в приложении или дождитесь смены политики лимитов.`,
       );
     }
   }
