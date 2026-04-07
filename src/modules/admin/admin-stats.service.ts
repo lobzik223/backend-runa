@@ -14,7 +14,7 @@ export class AdminStatsService {
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    const [onlineCount, subscriptionsActive, usersToday, newRegistrations, chartData, deletedAccounts] =
+    const [onlineCount, subscriptionsActive, usersToday, newRegistrations, chartData, deletedAccounts, totalUsers] =
       await Promise.all([
         this.prisma.device.count({ where: { lastSeenAt: { gte: tenMinAgo } } }),
         this.prisma.subscription.count({
@@ -27,6 +27,7 @@ export class AdminStatsService {
         this.prisma.user.count({ where: { createdAt: { gte: weekAgo } } }),
         this.getRegistrationsChartData(),
         this.prisma.user.count({ where: { deletionRequestedAt: { not: null } } }),
+        this.prisma.user.count(),
       ]);
 
     let databaseStatus: 'ok' | 'error' = 'ok';
@@ -43,6 +44,8 @@ export class AdminStatsService {
       newRegistrations,
       chartData,
       deletedAccounts,
+      /** Все строки в таблице users (реальное число пользователей в БД, без «суммы» по кругу). */
+      totalUsers,
       serverStatus: {
         database: databaseStatus,
         server: 'ok' as const,

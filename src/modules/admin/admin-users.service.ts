@@ -111,7 +111,7 @@ export class AdminUsersService {
     limit: number = 20,
   ) {
     const skip = Math.max(0, (page - 1) * limit);
-    const take = Math.min(100, Math.max(1, limit));
+    const take = Math.min(2000, Math.max(1, limit));
 
     const conditions: object[] = [];
     if (opts.userId != null && opts.userId > 0) {

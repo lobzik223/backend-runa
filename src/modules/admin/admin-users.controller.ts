@@ -21,7 +21,8 @@ export class AdminUsersController {
     @Query('limit') limit?: string,
   ) {
     const pageNum = Math.max(1, parseInt(String(page || '1'), 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(String(limit || '20'), 10) || 20));
+    /** Панель: нужен просмотр всех пользователей сразу; верхний предел защищает от случайного запроса миллионов строк. */
+    const limitNum = Math.min(2000, Math.max(1, parseInt(String(limit || '20'), 10) || 20));
     const userIdNum = userId != null && userId.trim() !== '' ? parseInt(userId.trim(), 10) : undefined;
     if (userIdNum !== undefined && (Number.isNaN(userIdNum) || userIdNum < 1)) {
       throw new BadRequestException('ID пользователя должен быть положительным числом');
