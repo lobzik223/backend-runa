@@ -19,6 +19,7 @@
     "subscription:revoke": "node scripts/subscription-admin.js revoke",
     "push:send": "ts-node -r tsconfig-paths/register src/scripts/send-push.ts",
     "push:send:prod": "node dist/scripts/send-push.js",
+    "db:count-users": "node scripts/count-users.js",
     "db:delete-all-users": "node scripts/delete-all-users.js",
     "admin:create": "node scripts/create-admin.js",
     "admin:delete": "node scripts/delete-admin.js",
