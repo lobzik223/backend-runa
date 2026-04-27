@@ -5,7 +5,7 @@ import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { AnalyticsDto } from './dto/analytics.dto';
-import { TransactionType } from '@prisma/client';
+import { PaymentMethodType, Prisma, TransactionType } from '@prisma/client';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -19,6 +19,34 @@ export class TransactionsService {
     private prisma: PrismaService,
     private creditAccountsService: CreditAccountsService,
   ) {}
+
+  private isWalletLedgerPm(pm: { type: PaymentMethodType; creditAccountId: number | null } | null): boolean {
+    if (!pm || pm.creditAccountId != null) return false;
+    return pm.type === PaymentMethodType.DEBIT_CARD || pm.type === PaymentMethodType.CREDIT_CARD;
+  }
+
+  private walletLedgerDelta(type: TransactionType, amount: number, mode: 'apply' | 'rollback'): number {
+    const signed = type === TransactionType.INCOME ? 1 : -1;
+    const m = mode === 'apply' ? 1 : -1;
+    return signed * amount * m;
+  }
+
+  private async applyWalletLedgerTx(
+    tx: Prisma.TransactionClient,
+    paymentMethodId: number,
+    type: TransactionType,
+    amount: number,
+    mode: 'apply' | 'rollback',
+  ): Promise<void> {
+    const pm = await tx.paymentMethod.findUnique({ where: { id: paymentMethodId } });
+    if (!this.isWalletLedgerPm(pm)) return;
+    const cur = pm!.balance != null ? Number(pm!.balance) : 0;
+    const delta = this.walletLedgerDelta(type, amount, mode);
+    await tx.paymentMethod.update({
+      where: { id: paymentMethodId },
+      data: { balance: cur + delta },
+    });
+  }
 
   private serializeTransaction(t: any) {
     if (!t) return t;
@@ -39,8 +67,16 @@ export class TransactionsService {
       paymentMethod: t.paymentMethod
         ? {
             id: t.paymentMethod.id,
+            type: t.paymentMethod.type,
             name: t.paymentMethod.name,
             creditAccountId: t.paymentMethod.creditAccountId ?? null,
+            clientId: t.paymentMethod.clientId ?? null,
+            balance: t.paymentMethod.balance != null ? Number(t.paymentMethod.balance) : null,
+            last4: t.paymentMethod.last4 ?? null,
+            network: t.paymentMethod.network ?? null,
+            design: t.paymentMethod.design ?? null,
+            coverImageKey: t.paymentMethod.coverImageKey ?? null,
+            cardCurrency: t.paymentMethod.cardCurrency ?? null,
             creditAccount: t.paymentMethod.creditAccount
               ? {
                   id: t.paymentMethod.creditAccount.id,
@@ -89,7 +125,29 @@ export class TransactionsService {
       }
     }
 
-    // Use Prisma transaction for atomicity when updating credit account debt
+    if (dto.clientReferenceId) {
+      const existing = await this.prisma.transaction.findUnique({
+        where: {
+          userId_clientReferenceId: {
+            userId,
+            clientReferenceId: dto.clientReferenceId,
+          },
+        },
+        include: {
+          category: { include: { parent: true } },
+          paymentMethod: {
+            include: {
+              creditAccount: true,
+            },
+          },
+        },
+      });
+      if (existing) {
+        return this.serializeTransaction(existing);
+      }
+    }
+
+    // Use Prisma transaction for atomicity when updating credit account debt / wallet balance
     const transaction = await this.prisma.$transaction(async (tx) => {
       const created = await tx.transaction.create({
         data: {
@@ -101,6 +159,7 @@ export class TransactionsService {
           note: dto.note,
           categoryId: dto.categoryId,
           paymentMethodId: dto.paymentMethodId,
+          clientReferenceId: dto.clientReferenceId ?? null,
         },
         include: {
           category: { include: { parent: true } },
@@ -120,13 +179,16 @@ export class TransactionsService {
         );
       }
 
+      if (dto.paymentMethodId && this.isWalletLedgerPm(paymentMethod)) {
+        await this.applyWalletLedgerTx(tx, dto.paymentMethodId, dto.type, dto.amount, 'apply');
+      }
+
       return created;
     });
 
-    // Fetch updated credit account data
-    if (transaction.paymentMethod?.creditAccountId) {
+    if (transaction.paymentMethodId) {
       const updatedPaymentMethod = await this.prisma.paymentMethod.findUnique({
-        where: { id: transaction.paymentMethodId! },
+        where: { id: transaction.paymentMethodId },
         include: { creditAccount: true },
       });
       if (updatedPaymentMethod) {
@@ -304,6 +366,10 @@ export class TransactionsService {
         },
       });
 
+      if (oldPaymentMethod && this.isWalletLedgerPm(oldPaymentMethod)) {
+        await this.applyWalletLedgerTx(tx, oldPaymentMethod.id, oldType, oldAmount, 'rollback');
+      }
+
       // Calculate debt delta
       // Old transaction: if EXPENSE with credit account, rollback (subtract old amount)
       if (oldType === TransactionType.EXPENSE && oldPaymentMethod?.creditAccountId) {
@@ -320,6 +386,10 @@ export class TransactionsService {
           finalPaymentMethod.creditAccountId,
           newAmount, // Increase debt
         );
+      }
+
+      if (finalPaymentMethod && this.isWalletLedgerPm(finalPaymentMethod)) {
+        await this.applyWalletLedgerTx(tx, finalPaymentMethod.id, newType, newAmount, 'apply');
       }
 
       return updatedTransaction;
@@ -353,9 +423,15 @@ export class TransactionsService {
 
     // Use Prisma transaction for atomicity
     await this.prisma.$transaction(async (tx) => {
-      await tx.transaction.delete({
-        where: { id },
-      });
+      if (paymentMethod && this.isWalletLedgerPm(paymentMethod)) {
+        await this.applyWalletLedgerTx(
+          tx,
+          paymentMethod.id,
+          transaction.type as TransactionType,
+          Number(transaction.amount),
+          'rollback',
+        );
+      }
 
       // Rollback debt if transaction was EXPENSE with credit account
       if (transaction.type === TransactionType.EXPENSE && paymentMethod?.creditAccountId) {
@@ -364,6 +440,10 @@ export class TransactionsService {
           -Number(transaction.amount), // Decrease debt (rollback)
         );
       }
+
+      await tx.transaction.delete({
+        where: { id },
+      });
     });
 
     return { message: 'Transaction deleted successfully' };

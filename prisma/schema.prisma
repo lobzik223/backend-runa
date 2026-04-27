@@ -404,6 +404,16 @@ model PaymentMethod {
   creditAccountId Int?
   creditAccount   CreditAccount? @relation(fields: [creditAccountId], references: [id], onDelete: SetNull)
 
+  /// Стабильный id карты с устройства (Runa Finance). Только для wallet-карт без creditAccountId.
+  clientId String? @map("client_id") @db.VarChar(128)
+  /// Демо-баланс для wallet DEBIT_CARD / CREDIT_CARD (без привязки к CreditAccount).
+  balance Decimal? @db.Decimal(18, 2)
+  last4         String? @db.VarChar(8)
+  network       String? @db.VarChar(32)
+  design        String? @db.VarChar(64)
+  coverImageKey String? @map("cover_image_key") @db.VarChar(512)
+  cardCurrency  String? @map("card_currency") @db.VarChar(8)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -412,6 +422,7 @@ model PaymentMethod {
   @@index([userId])
   @@index([type, isSystem])
   @@index([creditAccountId])
+  @@index([userId, clientId])
   @@unique([userId, type, name])
   @@map("payment_methods")
 }
@@ -435,9 +446,13 @@ model Transaction {
   paymentMethodId Int?
   paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
 
+  /// Id операции на клиенте (идемпотентность при синхронизации с приложением).
+  clientReferenceId String? @map("client_reference_id") @db.VarChar(128)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([userId, clientReferenceId], map: "transactions_user_client_ref_unique")
   @@index([userId, occurredAt])
   @@index([userId, type, occurredAt])
   @@index([categoryId])

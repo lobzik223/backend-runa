@@ -1,4 +1,4 @@
-import { IsEnum, IsNumber, IsString, IsOptional, IsDateString, Min } from 'class-validator';
+import { IsEnum, IsNumber, IsString, IsOptional, IsDateString, Min, MaxLength } from 'class-validator';
 import { TransactionType } from '@prisma/client';
 
 export class CreateTransactionDto {
@@ -27,4 +27,10 @@ export class CreateTransactionDto {
   @IsNumber()
   @IsOptional()
   paymentMethodId?: number;
+
+  /** Идемпотентность: id операции с клиента (Runa Finance). */
+  @IsString()
+  @IsOptional()
+  @MaxLength(128)
+  clientReferenceId?: string;
 }
