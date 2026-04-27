@@ -81,10 +81,11 @@ export class PaymentMethodsService {
     const incomingIds = cards.map((c) => c.clientId);
 
     await this.prisma.$transaction(async (tx) => {
+      const walletCardTypes: PaymentMethodType[] = [PaymentMethodType.DEBIT_CARD, PaymentMethodType.CREDIT_CARD];
       const walletTypeFilter = {
         userId,
         creditAccountId: null,
-        type: { in: [PaymentMethodType.DEBIT_CARD, PaymentMethodType.CREDIT_CARD] } as const,
+        type: { in: walletCardTypes },
       };
       if (incomingIds.length === 0) {
         await tx.paymentMethod.deleteMany({ where: walletTypeFilter });
