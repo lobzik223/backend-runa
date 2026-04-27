@@ -573,7 +573,8 @@ export class AuthService {
     if (!records.length) throw new UnauthorizedException('Неверный или истёкший код');
 
     const tryable = records.filter((r) => r.attempts < 5);
-    if (!tryable.length) {
+    const firstTryable = tryable[0];
+    if (!firstTryable) {
       throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
     }
 
@@ -587,7 +588,7 @@ export class AuthService {
 
     if (!record) {
       await this.prisma.emailVerificationCode.update({
-        where: { id: tryable[0].id },
+        where: { id: firstTryable.id },
         data: { attempts: { increment: 1 } },
       });
       throw new UnauthorizedException('Неверный код');
