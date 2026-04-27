@@ -500,6 +500,12 @@ export class AuthService {
         throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
       }
 
+      // Иначе verify берёт только последнюю запись — код из предыдущего письма перестаёт подходить.
+      await this.prisma.emailVerificationCode.updateMany({
+        where: { email, purpose: 'registration', consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+
       const code = this.generateOtpCode();
       const codeHash = await this.hashOtp(code);
       const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS);
@@ -552,9 +558,9 @@ export class AuthService {
     userAgent?: string;
   }) {
     const email = this.normalizeEmail(input.email);
-    const code = input.code.trim();
+    const code = String(input.code ?? '').replace(/\D/g, '');
 
-    const record = await this.prisma.emailVerificationCode.findFirst({
+    const records = await this.prisma.emailVerificationCode.findMany({
       where: {
         email,
         purpose: 'registration',
@@ -564,13 +570,24 @@ export class AuthService {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!record) throw new UnauthorizedException('Неверный или истёкший код');
-    if (record.attempts >= 5) throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
+    if (!records.length) throw new UnauthorizedException('Неверный или истёкший код');
 
-    const ok = await this.verifyOtpHash(record.codeHash, code);
-    if (!ok) {
+    const tryable = records.filter((r) => r.attempts < 5);
+    if (!tryable.length) {
+      throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
+    }
+
+    let record: (typeof records)[number] | null = null;
+    for (const r of tryable) {
+      if (await this.verifyOtpHash(r.codeHash, code)) {
+        record = r;
+        break;
+      }
+    }
+
+    if (!record) {
       await this.prisma.emailVerificationCode.update({
-        where: { id: record.id },
+        where: { id: tryable[0].id },
         data: { attempts: { increment: 1 } },
       });
       throw new UnauthorizedException('Неверный код');
@@ -658,6 +675,11 @@ export class AuthService {
     if (recent > 0) {
       throw new BadRequestException('Повторная отправка кода возможна через 3 минуты');
     }
+
+    await this.prisma.emailVerificationCode.updateMany({
+      where: { email, purpose: 'password_reset', consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
 
     const code = this.generateOtpCode();
     const codeHash = await this.hashOtp(code);
