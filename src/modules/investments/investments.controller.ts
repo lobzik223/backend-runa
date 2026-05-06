@@ -14,6 +14,7 @@ import { InvestmentsService } from './investments.service';
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
 import { UpdateBalanceDto } from './dto/update-balance.dto';
+import { TopUpInvestmentDto } from './dto/top-up-investment.dto';
 import { GetCandlesDto, CandleInterval } from './dto/get-candles.dto';
 import { SearchAssetsDto } from './dto/search-assets.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
@@ -95,6 +96,33 @@ export class InvestmentsController {
   @Patch('balance')
   updateBalance(@CurrentUser() user: JwtAccessPayload, @Body() dto: UpdateBalanceDto) {
     return this.investmentsService.updateInvestmentBalance(user.sub, dto.balance);
+  }
+
+  /**
+   * Пополнение инвестиционного счёта (дневной лимит на валюту — см. сервис).
+   * POST /api/investments/top-up
+   */
+  @Post('top-up')
+  topUp(@CurrentUser() user: JwtAccessPayload, @Body() dto: TopUpInvestmentDto) {
+    return this.investmentsService.topUpInvestment(user.sub, dto.amount, dto.currency);
+  }
+
+  /**
+   * История покупок (крипта и биржа) по лотам пользователя.
+   * GET /api/investments/history/purchases
+   */
+  @Get('history/purchases')
+  purchaseHistory(@CurrentUser() user: JwtAccessPayload) {
+    return this.investmentsService.getPurchaseHistory(user.sub);
+  }
+
+  /**
+   * Криптовалютный маркет в ₽ (CoinGecko) + URL иконок PNG.
+   * GET /api/investments/market/crypto-demo
+   */
+  @Get('market/crypto-demo')
+  cryptoMarketQuotes() {
+    return this.investmentsService.getCryptoMarketQuotes();
   }
 
   /**

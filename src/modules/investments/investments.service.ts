@@ -6,15 +6,23 @@ import {
   Logger,
   Inject,
 } from '@nestjs/common';
+import { InvestmentAssetType, TransactionType } from '@prisma/client';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 import { PrismaService } from '../prisma/prisma.service';
 import { MarketDataProvider, type AssetSearchResult } from './interfaces/market-data-provider.interface';
 import { AddAssetDto } from './dto/add-asset.dto';
 import { AddLotDto } from './dto/add-lot.dto';
 import { PortfolioResponseDto, AssetPortfolioMetrics } from './dto/portfolio-response.dto';
+import { DAILY_INVESTMENT_TOP_UP_LIMIT } from './dto/top-up-investment.dto';
 import { MAX_INVESTMENT_BALANCE } from './dto/update-balance.dto';
-import { InvestmentAssetType, TransactionType } from '@prisma/client';
+import { CoinGeckoCryptoMarketService } from './services/coingecko-crypto-market.service';
 import { SearchAssetType } from './dto/search-assets.dto';
 import { getAssetLogoUrl } from './constants/tinkoff-icon-map';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 @Injectable()
 export class InvestmentsService {
@@ -24,6 +32,7 @@ export class InvestmentsService {
     private prisma: PrismaService,
     @Inject('MarketDataProvider')
     private marketDataProvider: MarketDataProvider,
+    private coinGeckoCrypto: CoinGeckoCryptoMarketService,
   ) {}
 
   /**
@@ -301,7 +310,7 @@ export class InvestmentsService {
       }),
     ]);
 
-    let initialBalance = 100_000;
+    let initialBalance = 0;
     try {
       const row = await this.prisma.$queryRawUnsafe<Array<{ investmentInitialBalance?: unknown }>>(
         'SELECT "investmentInitialBalance" FROM users WHERE id = $1',
@@ -313,7 +322,7 @@ export class InvestmentsService {
       }
     } catch (e) {
       this.logger.warn(
-        '[Investments] investmentInitialBalance not available, using 100000:',
+        '[Investments] investmentInitialBalance not available, using 0:',
         (e as Error).message,
       );
     }
@@ -388,7 +397,7 @@ export class InvestmentsService {
         try {
           await this.prisma.$executeRawUnsafe(`
             ALTER TABLE "users"
-            ADD COLUMN IF NOT EXISTS "investmentInitialBalance" DECIMAL(18,2) NOT NULL DEFAULT 100000
+            ADD COLUMN IF NOT EXISTS "investmentInitialBalance" DECIMAL(18,2) NOT NULL DEFAULT 0
           `);
           await this.prisma.$executeRawUnsafe(
             'UPDATE users SET "investmentInitialBalance" = $1 WHERE id = $2',
@@ -821,5 +830,122 @@ export class InvestmentsService {
     }
 
     return results;
+  }
+
+  /** Котировки криптовалют в ₽ + иконки (CoinGecko, кеш на сервере; при сбое — статический список). */
+  async getCryptoMarketQuotes() {
+    return this.coinGeckoCrypto.fetchMarketRows();
+  }
+
+  /** История покупок (лотов) по активам пользователя — крипта и биржа. */
+  async getPurchaseHistory(userId: number, take = 200) {
+    const lots = await this.prisma.investmentLot.findMany({
+      where: { userId },
+      include: { asset: true },
+      orderBy: { boughtAt: 'desc' },
+      take,
+    });
+
+    return lots.map((lot) => {
+      const qty = Number(lot.quantity);
+      const px = Number(lot.pricePerUnit);
+      const fees = Number(lot.fees ?? 0);
+      const segment = lot.asset.assetType === 'CRYPTO' ? ('CRYPTO' as const) : ('EXCHANGE' as const);
+
+      return {
+        id:
+          typeof lot.id === 'bigint' ? lot.id.toString() : String(lot.id),
+        segment,
+        symbol: lot.asset.symbol,
+        name: lot.asset.name,
+        assetType: lot.asset.assetType,
+        quantity: qty,
+        pricePerUnit: px,
+        fees,
+        totalCost: Math.round((qty * px + fees) * 100) / 100,
+        currency: lot.asset.currency,
+        boughtAt: lot.boughtAt.toISOString(),
+      };
+    });
+  }
+
+  /**
+   * Пополнение инвестиционного счёта: растёт `investmentInitialBalance`.
+   * Дневной лимит суммарных пополнений — до `DAILY_INVESTMENT_TOP_UP_LIMIT` на каждую валюту (по времени Москвы).
+   */
+  async topUpInvestment(userId: number, amount: number, currencyRaw?: string) {
+    const currency = (currencyRaw ?? 'RUB').trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      throw new BadRequestException('Укажите код валюты из трёх латинских букв (например RUB).');
+    }
+
+    const rounded = Math.round(amount * 100) / 100;
+    if (!Number.isFinite(rounded) || rounded <= 0) {
+      throw new BadRequestException('Сумма пополнения должна быть положительной.');
+    }
+
+    const dayStartMskUtc = dayjs().tz('Europe/Moscow').startOf('day').utc().toDate();
+
+    const todayAgg = await this.prisma.investmentTopUp.aggregate({
+      where: {
+        userId,
+        currency,
+        createdAt: { gte: dayStartMskUtc },
+      },
+      _sum: { amount: true },
+    });
+
+    const usedToday = Number(todayAgg._sum.amount ?? 0);
+    const remainingToday = Math.max(0, DAILY_INVESTMENT_TOP_UP_LIMIT - usedToday);
+    if (rounded > remainingToday) {
+      throw new BadRequestException(
+        `Дневной лимит пополнения ${DAILY_INVESTMENT_TOP_UP_LIMIT.toLocaleString('ru-RU')} ${currency} исчерпан.` +
+          (remainingToday > 0 ? ` Доступно сегодня ещё ≈ ${remainingToday.toLocaleString('ru-RU')} ${currency}.` : ''),
+      );
+    }
+
+    const before = await this.getPortfolio(userId);
+    const nextAvailable = Math.round((before.availableBalance + rounded) * 100) / 100;
+    if (nextAvailable > MAX_INVESTMENT_BALANCE) {
+      throw new BadRequestException(
+        `После пополнения баланс превысит допустимый максимум (${MAX_INVESTMENT_BALANCE.toLocaleString('ru-RU')} ₽).`,
+      );
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.investmentTopUp.create({
+          data: {
+            userId,
+            currency,
+            amount: rounded,
+          },
+        });
+
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            investmentInitialBalance: { increment: rounded },
+          },
+        });
+      });
+    } catch (e: unknown) {
+      const msg = (e as Error)?.message ?? '';
+      if (
+        typeof msg === 'string' &&
+        (msg.includes('investment_top_ups') || msg.includes('relation') || msg.includes('does not exist'))
+      ) {
+        throw new BadRequestException('Пополнение недоступно: выполните миграцию БД на сервере.');
+      }
+      throw e;
+    }
+
+    const after = await this.getPortfolio(userId);
+    return {
+      availableBalance: after.availableBalance,
+      toppedUpToday: Math.round((usedToday + rounded) * 100) / 100,
+      dailyLimit: DAILY_INVESTMENT_TOP_UP_LIMIT,
+      currency,
+    };
   }
 }

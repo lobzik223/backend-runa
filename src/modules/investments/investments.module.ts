@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { InvestmentsService } from './investments.service';
 import { InvestmentsController } from './investments.controller';
+import { CoinGeckoCryptoMarketService } from './services/coingecko-crypto-market.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { env } from '../../config/env.validation';
 import { MockMarketDataProvider } from './providers/mock-market-data.provider';
@@ -13,6 +14,7 @@ import { TinkoffMarketDataProvider } from './providers/tinkoff-market-data.provi
   controllers: [InvestmentsController],
   providers: [
     InvestmentsService,
+    CoinGeckoCryptoMarketService,
     MockMarketDataProvider,
     MoexMarketDataProvider,
     TinkoffMarketDataProvider,

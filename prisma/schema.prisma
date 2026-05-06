@@ -97,8 +97,8 @@ model User {
   trialUntil   DateTime? // Free trial end date
   premiumUntil DateTime? // Premium subscription end date
 
-  // Инвестиции: начальный баланс счёта (по умолчанию 100 000 ₽), пользователь может менять
-  investmentInitialBalance Decimal @default(100000) @db.Decimal(18, 2)
+  // Инвестиции: базовое пополнение счёта (новые пользователи — с нуля); растёт через пополнение/коррекции
+  investmentInitialBalance Decimal @default(0) @db.Decimal(18, 2)
 
   // Удаление аккаунта: заморозка 30 дней, восстановление возможно в первые 14 дней
   deletionRequestedAt DateTime?
@@ -130,6 +130,7 @@ model User {
 
   investmentAssets InvestmentAsset[]
   investmentLots   InvestmentLot[]
+  investmentTopUps InvestmentTopUp[]
 
   referralCode    ReferralCode?
   subscription    Subscription?
@@ -622,6 +623,20 @@ model InvestmentAsset {
   @@unique([userId, symbol])
   @@index([userId, assetType])
   @@map("investment_assets")
+}
+
+model InvestmentTopUp {
+  id       String @id @default(uuid())
+  userId   Int
+  user     User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /** Сумма в единицах валюты `currency` (лимит «в день» считается отдельно по каждой валюте). */
+  amount   Decimal @db.Decimal(18, 2)
+  currency String  @default("RUB")
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, currency, createdAt])
+  @@map("investment_top_ups")
 }
 
 model InvestmentLot {
