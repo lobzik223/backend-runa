@@ -123,6 +123,13 @@ export class TransactionsService {
       if (paymentMethod.userId !== null && paymentMethod.userId !== userId) {
         throw new ForbiddenException('Payment method does not belong to user');
       }
+
+      const pmCur = paymentMethod.cardCurrency as string | null | undefined;
+      if (pmCur != null && String(pmCur).trim() !== '' && dto.currency != null && String(dto.currency).trim() !== '') {
+        if (String(pmCur).trim().toUpperCase() !== String(dto.currency).trim().toUpperCase()) {
+          throw new BadRequestException('Transaction currency must match payment method currency');
+        }
+      }
     }
 
     if (dto.clientReferenceId) {

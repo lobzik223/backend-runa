@@ -11,8 +11,9 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import * as crypto from 'node:crypto';
-import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import * as jwt from 'jsonwebtoken';
+import type { EmailVerificationCode } from '@prisma/client';
 import { env } from '../../config/env.validation';
 import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -25,6 +26,15 @@ type Tokens = {
   accessToken: string;
   refreshToken: string;
 };
+
+/** Ответ при входе в аккаунт, уже помеченный на удаление (ещё можно восстановить). */
+export type AccountScheduledForDeletionPayload = Readonly<{
+  message: 'account_scheduled_for_deletion';
+  accountScheduledForDeletion: true;
+  email: string;
+  daysLeftRestore: number;
+  daysLeftDelete: number;
+}>;
 
 const EMAIL_CODE_TTL_MS = 15 * 60 * 1000; // 15 минут
 const EMAIL_RESEND_COOLDOWN_MS = 3 * 60 * 1000; // 3 минуты до повторной отправки
@@ -367,7 +377,7 @@ export class AuthService {
       await this.applyReferralIfValid({ newUserId: user.id, referralCode: input.referralCode, deviceId: input.deviceId, ip: input.ip });
     }
 
-    const sessionId = randomUUID();
+    const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
     await this.prisma.refreshSession.create({
       data: {
@@ -438,7 +448,7 @@ export class AuthService {
     });
 
     // Create a refresh session immediately (optional, but nice for mobile UX)
-    const sessionId = randomUUID();
+    const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
 
     await this.prisma.refreshSession.create({
@@ -572,7 +582,7 @@ export class AuthService {
 
     if (!records.length) throw new UnauthorizedException('Неверный или истёкший код');
 
-    const tryable = records.filter((r) => r.attempts < 5);
+    const tryable = records.filter((r: EmailVerificationCode) => r.attempts < 5);
     const firstTryable = tryable[0];
     if (!firstTryable) {
       throw new UnauthorizedException('Слишком много попыток. Запросите новый код.');
@@ -618,7 +628,7 @@ export class AuthService {
       select: { id: true, email: true, name: true, createdAt: true },
     });
 
-    const sessionId = randomUUID();
+    const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
     await this.prisma.refreshSession.create({
       data: {
@@ -802,13 +812,13 @@ export class AuthService {
       return {
         message: 'account_scheduled_for_deletion',
         accountScheduledForDeletion: true,
-        email: user.email,
+        email: String(user.email ?? email),
         daysLeftRestore,
         daysLeftDelete,
-      } as any;
+      } satisfies AccountScheduledForDeletionPayload;
     }
 
-    const sessionId = randomUUID();
+    const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
     await this.prisma.refreshSession.create({
       data: {
@@ -889,13 +899,13 @@ export class AuthService {
       return {
         message: 'account_scheduled_for_deletion',
         accountScheduledForDeletion: true,
-        email: user.email,
+        email: String(user.email ?? email),
         daysLeftRestore,
         daysLeftDelete,
-      } as any;
+      } satisfies AccountScheduledForDeletionPayload;
     }
 
-    const sessionId = randomUUID();
+    const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
     await this.prisma.refreshSession.create({
       data: {
@@ -1002,13 +1012,13 @@ export class AuthService {
       return {
         message: 'account_scheduled_for_deletion',
         accountScheduledForDeletion: true,
-        email: user.email,
+        email: String(user.email ?? email),
         daysLeftRestore,
         daysLeftDelete,
-      } as any;
+      } satisfies AccountScheduledForDeletionPayload;
     }
 
-    const sessionId = randomUUID();
+    const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
     await this.prisma.refreshSession.create({
       data: {
@@ -1055,10 +1065,17 @@ export class AuthService {
 
     const referralCode = await this.ensureUserReferralCode(userId);
 
+    const referralInvitedCount = await this.prisma.referralRedemption.count({
+      where: { inviterUserId: userId },
+    });
+    /** Совпадает с бонусом пригласившему в applyReferralIfValid (grantPremium × дней). */
+    const referralPremiumBonusDaysPerInvite = 7;
+    const referralPremiumDaysEarned = referralInvitedCount * referralPremiumBonusDaysPerInvite;
+
     return {
       user: {
         id: user.id,
-        email: user.email,
+        email: user.email ?? '',
         name: user.name,
         createdAt: user.createdAt,
         trialUntil: user.trialUntil,
@@ -1073,6 +1090,10 @@ export class AuthService {
               },
       },
       referralCode,
+      referralInvitedCount,
+      referralPremiumDaysEarned,
+      /** Успешные приглашения (валидный промокод при регистрации). */
+      referralActivationsCount: referralInvitedCount,
     };
   }
 
@@ -1098,7 +1119,7 @@ export class AuthService {
       throw new UnauthorizedException('Подозрительная активность. Выполните вход заново.');
     }
 
-    const newSessionId = randomUUID();
+    const newSessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + env.JWT_REFRESH_TTL_SECONDS * 1000);
 
     // Сначала создаём новую сессию, потом обновляем старую (чтобы внешний ключ работал)

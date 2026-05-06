@@ -23,6 +23,13 @@ import { JwtAccessGuard } from './guards/jwt-access.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import type { JwtAccessPayload, JwtRefreshPayload } from './types/jwt-payload';
 
+function readDeviceIdHeader(req: Request): string | undefined {
+  const raw = req.headers['x-device-id'];
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  if (Array.isArray(raw) && raw[0] && typeof raw[0] === 'string' && raw[0].trim()) return raw[0].trim();
+  return undefined;
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -30,16 +37,14 @@ export class AuthController {
   @Post('register')
   @Throttle({ default: { limit: 5, ttl: 60 } })
   register(@Body() dto: RegisterDto, @Req() req: Request) {
-    const cleanDto: any = {
+    const referralTrimmed =
+      dto.referralCode != null ? String(dto.referralCode).trim() : '';
+
+    return this.auth.register({
       name: dto.name,
       email: dto.email,
       password: dto.password,
-    };
-    if (dto.referralCode != null && String(dto.referralCode).trim()) {
-      cleanDto.referralCode = String(dto.referralCode).trim();
-    }
-    return this.auth.register({
-      ...cleanDto,
+      ...(referralTrimmed ? { referralCode: referralTrimmed } : {}),
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     });
@@ -53,7 +58,7 @@ export class AuthController {
       email: dto.email,
       password: dto.password,
       referralCode: dto.referralCode,
-      deviceId: (req as any).headers?.['x-device-id'],
+      deviceId: readDeviceIdHeader(req),
       ip: req.ip,
     });
   }
@@ -64,7 +69,7 @@ export class AuthController {
     return this.auth.verifyRegistrationCode({
       email: dto.email,
       code: dto.code,
-      deviceId: (req as any).headers?.['x-device-id'],
+      deviceId: readDeviceIdHeader(req),
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     });
@@ -149,7 +154,7 @@ export class AuthController {
     return this.auth.applyReferralForCurrentUser({
       userId: req.user.sub,
       referralCode: dto.referralCode,
-      deviceId: (req as any).headers?.['x-device-id'],
+      deviceId: readDeviceIdHeader(req),
       ip: req.ip,
     });
   }
