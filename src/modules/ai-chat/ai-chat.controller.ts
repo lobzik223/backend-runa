@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { AIChatService } from './ai-chat.service';
 import { ChatMessageDto } from './dto/chat-message.dto';
+import { TranscribeAudioDto } from './dto/transcribe-audio.dto';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAccessPayload } from '../auth/types/jwt-payload';
@@ -29,12 +30,7 @@ export class AIChatController {
   @Post('chat')
   async sendMessage(@CurrentUser() user: JwtAccessPayload, @Body() dto: ChatMessageDto) {
     try {
-      return await this.aiChatService.sendMessage(
-        user.sub,
-        dto.message,
-        dto.threadId,
-        dto.preferredLanguage,
-      );
+      return await this.aiChatService.sendMessage(user.sub, dto);
     } catch (err) {
       if (err instanceof HttpException) throw err;
       const msg = err instanceof Error ? err.message : String(err);
@@ -43,6 +39,21 @@ export class AIChatController {
       throw new InternalServerErrorException(
         'Не удалось обработать сообщение. Попробуйте позже.',
       );
+    }
+  }
+
+  /**
+   * Голос → текст (Whisper). Ответ используйте в обычном POST /api/ai/chat.
+   */
+  @Post('transcribe')
+  async transcribe(@CurrentUser() user: JwtAccessPayload, @Body() dto: TranscribeAudioDto) {
+    try {
+      return await this.aiChatService.transcribeVoice(user.sub, dto.audioBase64, dto.mimeType);
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[AI transcribe] failed: ${msg}`);
+      throw new InternalServerErrorException('Не удалось распознать речь. Попробуйте позже.');
     }
   }
 

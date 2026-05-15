@@ -114,6 +114,11 @@ model User {
   nameUpdatedAt   DateTime  @default(now())
   nameChangeCount Int       @default(0) // 0 = ещё не менял имя (первая смена без ограничения), далее раз в 14 дней
 
+  /** При регистрации: возраст пользователя (лет) — для контекста RUNA AI */
+  profileAge     Int?      @map("profile_age")
+  /** Цель в приложении из онбординга: «Инвестиции», «Учёт бюджета» и т.д. */
+  financePurpose String?   @map("finance_purpose") @db.VarChar(160)
+
   refreshSessions RefreshSession[]
   pinSecurity     PinSecurity?
 
@@ -693,6 +698,9 @@ model AiMessage {
 
   role    AiRole
   content String
+
+  /** Пользователь отправил изображение для анализа (vision) — для лимитов Free */
+  hasImageAttachment Boolean @default(false) @map("has_image_attachment")
 
   // optional usage tracking
   model     String?

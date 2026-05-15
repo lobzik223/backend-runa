@@ -7,6 +7,15 @@ import type { WalletCardSyncItemDto } from './dto/sync-wallet-cards.dto';
 export class PaymentMethodsService {
   constructor(private prisma: PrismaService) {}
 
+  /** ISO-код валюты карты для БД (верхний регистр, до 8 символов). */
+  private normalizeCardCurrency(raw: string | undefined | null): string {
+    const t = String(raw ?? 'RUB')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+    return (t.length > 0 ? t : 'RUB').slice(0, 8);
+  }
+
   private mapRow(pm: {
     id: number;
     type: PaymentMethodType;
@@ -105,6 +114,7 @@ export class PaymentMethodsService {
         const balance = c.balance ?? 0;
         const iconKey = c.type === PaymentMethodType.DEBIT_CARD ? 'debit' : 'credit';
         const sortOrder = c.type === PaymentMethodType.DEBIT_CARD ? 20 : 25;
+        const cardCurrency = this.normalizeCardCurrency(c.cardCurrency);
 
         if (existing) {
           await tx.paymentMethod.update({
@@ -118,7 +128,7 @@ export class PaymentMethodsService {
               network: c.network ?? null,
               design: c.design ?? null,
               coverImageKey: c.coverImageKey ?? null,
-              cardCurrency: c.cardCurrency ?? 'RUB',
+              cardCurrency,
             },
           });
         } else {
@@ -137,7 +147,7 @@ export class PaymentMethodsService {
                 network: c.network ?? null,
                 design: c.design ?? null,
                 coverImageKey: c.coverImageKey ?? null,
-                cardCurrency: c.cardCurrency ?? 'RUB',
+                cardCurrency,
               },
             });
           } catch (e: unknown) {
@@ -157,7 +167,7 @@ export class PaymentMethodsService {
                   network: c.network ?? null,
                   design: c.design ?? null,
                   coverImageKey: c.coverImageKey ?? null,
-                  cardCurrency: c.cardCurrency ?? 'RUB',
+                  cardCurrency,
                 },
               });
             } else {

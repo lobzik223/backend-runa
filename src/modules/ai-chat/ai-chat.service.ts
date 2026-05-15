@@ -11,6 +11,7 @@ import { AIRulesEngineService, AIStructuredOutput } from './ai-rules-engine.serv
 import { LLMService } from './llm.service';
 import { ChartDataService } from './chart-data.service';
 import { WebSearchService } from './web-search.service';
+import type { ChatMessageDto } from './dto/chat-message.dto';
 import dayjs from 'dayjs';
 
 export interface ChatMessage {
@@ -32,6 +33,10 @@ export interface ChatUsageInfo {
   totalTokenLimit?: number;
   tokensUsedTotal?: number;
   tokensRemainingApprox?: number;
+  /** Анализы фото за сегодня (USER с hasImageAttachment), только Free */
+  visionAnalysesUsedToday?: number;
+  visionAnalysesLimitPerDay?: number;
+  visionAnalysesRemainingToday?: number;
 }
 
 export interface ChatResponse {
@@ -56,6 +61,11 @@ export class AIChatService {
     1000,
     Number(process.env.AI_CHAT_FREE_TOKEN_LIMIT) || 20000,
   );
+  /** Анализов фото за сутки на Free */
+  private readonly FREE_TIER_VISION_PER_DAY = Math.max(
+    1,
+    Number(process.env.AI_CHAT_FREE_VISION_PER_DAY) || 3,
+  );
   private readonly LLM_HISTORY_MAX_MESSAGES = Math.min(
     64,
     Math.max(4, Number(process.env.AI_CHAT_HISTORY_MAX_MESSAGES) || 32),
@@ -70,12 +80,12 @@ export class AIChatService {
     private webSearchService: WebSearchService,
   ) {}
 
-  async sendMessage(
-    userId: number,
-    userMessage: string,
-    threadId?: string,
-    preferredLanguage?: 'ru' | 'en',
-  ): Promise<ChatResponse> {
+  async sendMessage(userId: number, dto: ChatMessageDto): Promise<ChatResponse> {
+    const threadId = dto.threadId;
+    const preferredLanguage = dto.preferredLanguage;
+    const userMessage = (dto.message ?? '').trim();
+    const imagePayload = this.parseImagePayload(dto);
+
     const step = (name: string) => (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`[AI Chat] Failed at step "${name}": ${msg}`);
@@ -83,19 +93,30 @@ export class AIChatService {
     };
 
     try {
-      // 1. Очистка старых сообщений перед обработкой нового
-      await this.cleanupOldMessages(userId).catch(step('cleanupOldMessages'));
-
-      // Validate message safety
-      const safetyCheck = this.llmService.validateUserMessage(userMessage);
+      if (!userMessage.length && !imagePayload) {
+        throw new BadRequestException('Введите текст или прикрепите фото.');
+      }
+      const safetyCheck = this.llmService.validateUserMessage(userMessage || 'На изображении может быть финансовый документ.');
       if (!safetyCheck.safe) {
         throw new BadRequestException(safetyCheck.reason);
       }
 
-      // Check message limits
+      const userPremium = await this.isUserPremium(userId);
+
+      await this.cleanupOldMessages(userId).catch(step('cleanupOldMessages'));
+
+      if (imagePayload) {
+        const approxBytes = (imagePayload.base64.length * 3) / 4;
+        if (approxBytes > 5 * 1024 * 1024) {
+          throw new BadRequestException('Фото слишком большое. Выберите снимок поменьше.');
+        }
+        if (!userPremium) {
+          await this.checkVisionLimit(userId);
+        }
+      }
+
       await this.checkMessageLimit(userId);
 
-      // Get or create thread
       let thread;
       if (threadId) {
         thread = await this.prisma.aiThread.findUnique({
@@ -108,25 +129,27 @@ export class AIChatService {
           throw new ForbiddenException('Thread does not belong to user');
         }
       } else {
+        const titleSeed = userMessage || 'Фото в чате';
         thread = await this.prisma.aiThread.create({
           data: {
             userId,
-            title: userMessage.substring(0, 50), // Auto-title from first message
+            title: titleSeed.substring(0, 50),
           },
         });
       }
 
-      // Save user message
+      const contentForDb = userMessage.length ? userMessage : '(📷 изображение)';
+
       await this.prisma.aiMessage.create({
         data: {
           userId,
           threadId: thread.id,
           role: 'USER',
-          content: userMessage,
+          content: contentForDb,
+          hasImageAttachment: !!imagePayload,
         },
       });
 
-      // Финансовый контекст: при сбое БД/таймаута — пустой контекст, чтобы чат не отваливался целиком
       let financeContext: FinanceContext;
       try {
         financeContext = await this.financeContextService.getFinanceContext(userId);
@@ -136,20 +159,16 @@ export class AIChatService {
         financeContext = createEmptyFinanceContext();
       }
 
-      // Run rules engine
       let structuredOutputs = this.rulesEngine.analyze(financeContext);
 
-      // Check if user is requesting charts
-      const isChartRequest = this.detectChartRequest(userMessage);
+      const isChartRequest = userMessage.length > 0 && this.detectChartRequest(userMessage);
       let chartData = null;
 
       if (isChartRequest) {
         const dateRange = this.extractDateRange(userMessage);
-        chartData = await this.chartDataService.getDonutChartData(
-          userId,
-          dateRange?.start,
-          dateRange?.end,
-        ).catch(step('getDonutChartData'));
+        chartData = await this.chartDataService
+          .getDonutChartData(userId, dateRange?.start, dateRange?.end)
+          .catch(step('getDonutChartData'));
 
         structuredOutputs.push({
           type: 'chart_request',
@@ -161,18 +180,27 @@ export class AIChatService {
         });
       }
 
-      const webSearchResults = await this.webSearchService.search(userMessage);
+      const searchQuery = userMessage || 'финансы чек расходы изображение';
+      const webSearchResults = await this.webSearchService.search(searchQuery);
 
       const conversationForLlm = await this.loadConversationForLlm(thread.id);
 
-      const llmResponse = await this.llmService.generateResponse(
-        userMessage,
-        structuredOutputs,
-        financeContext,
-        webSearchResults,
-        preferredLanguage,
-        conversationForLlm,
-      ).catch(step('generateResponse'));
+      const llmResponse = await this.llmService
+        .generateResponse(
+          userMessage || 'Пользователь прислал изображение для анализа.',
+          structuredOutputs,
+          financeContext,
+          webSearchResults,
+          preferredLanguage,
+          conversationForLlm,
+          imagePayload
+            ? {
+                vision: { base64: imagePayload.base64, mime: imagePayload.mime },
+                compactOutput: !userPremium,
+              }
+            : undefined,
+        )
+        .catch(step('generateResponse'));
 
       const assistantMsg = await this.prisma.aiMessage.create({
         data: {
@@ -201,6 +229,75 @@ export class AIChatService {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`[AI Chat] sendMessage error: ${msg}`, err instanceof Error ? err.stack : undefined);
       throw err;
+    }
+  }
+
+  async transcribeVoice(userId: number, audioBase64: string, mimeType?: string): Promise<{ text: string }> {
+    void userId;
+    const clean = audioBase64.replace(/\s/g, '');
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(clean, 'base64');
+    } catch {
+      throw new BadRequestException('Некорректные данные аудио.');
+    }
+    if (buffer.length < 200) {
+      throw new BadRequestException('Запись слишком короткая.');
+    }
+    if (buffer.length > 2.5 * 1024 * 1024) {
+      throw new BadRequestException('Запись слишком длинная.');
+    }
+    const ext =
+      mimeType?.includes('webm') ? 'webm' : mimeType?.includes('wav') ? 'wav' : 'm4a';
+    const filename = `voice-${userId}.${ext}`;
+    const mt = mimeType || 'audio/m4a';
+    try {
+      const text = await this.llmService.transcribeAudioBuffer(buffer, filename, mt);
+      return { text };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`[AI Chat] transcribeVoice: ${msg}`);
+      throw new BadRequestException(msg || 'Не удалось распознать речь.');
+    }
+  }
+
+  private parseImagePayload(
+    dto: ChatMessageDto,
+  ): { base64: string; mime: 'image/jpeg' | 'image/png' | 'image/webp' } | null {
+    const raw = dto.imageBase64?.trim();
+    if (!raw) return null;
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([\s\S]+)$/i.exec(raw);
+    if (m?.[1] && m[2]) {
+      const mime = m[1].toLowerCase() as 'image/jpeg' | 'image/png' | 'image/webp';
+      return { mime, base64: m[2].replace(/\s/g, '') };
+    }
+    const mime = (dto.imageMimeType || 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp';
+    return { base64: raw.replace(/\s/g, ''), mime };
+  }
+
+  private async isUserPremium(userId: number): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { subscription: true },
+    });
+    return user?.subscription?.status === 'ACTIVE';
+  }
+
+  private async checkVisionLimit(userId: number) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const used = await this.prisma.aiMessage.count({
+      where: {
+        userId,
+        role: AiRole.USER,
+        hasImageAttachment: true,
+        createdAt: { gte: todayStart },
+      },
+    });
+    if (used >= this.FREE_TIER_VISION_PER_DAY) {
+      throw new BadRequestException(
+        `На бесплатном тарифе доступно ${this.FREE_TIER_VISION_PER_DAY} анализа фото в сутки. Оформите Premium для безлимита или попробуйте завтра.`,
+      );
     }
   }
 
@@ -332,6 +429,14 @@ export class AIChatService {
         createdAt: { gte: todayStart },
       },
     });
+    const visionToday = await this.prisma.aiMessage.count({
+      where: {
+        userId,
+        role: 'USER',
+        hasImageAttachment: true,
+        createdAt: { gte: todayStart },
+      },
+    });
     const totalTokens = await this.prisma.aiMessage.aggregate({
       where: { userId },
       _sum: { tokensIn: true, tokensOut: true },
@@ -348,6 +453,9 @@ export class AIChatService {
       totalTokenLimit: tokenLimit,
       tokensUsedTotal: tokensUsed,
       tokensRemainingApprox: Math.max(0, tokenLimit - tokensUsed),
+      visionAnalysesUsedToday: visionToday,
+      visionAnalysesLimitPerDay: this.FREE_TIER_VISION_PER_DAY,
+      visionAnalysesRemainingToday: Math.max(0, this.FREE_TIER_VISION_PER_DAY - visionToday),
     };
   }
 

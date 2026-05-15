@@ -66,6 +66,21 @@ export interface FinanceContext {
     eur: number;
     date: string;
   } | null;
+
+  /** Из профиля (регистрация / настройки) — для персонализации RUNA AI */
+  userProfile?: {
+    displayName: string;
+    profileAge: number | null;
+    financePurpose: string | null;
+  };
+
+  /** Последние 3 календарных месяца: доход / расход / остаток */
+  monthlyTrend?: Array<{
+    yearMonth: string;
+    income: number;
+    expense: number;
+    net: number;
+  }>;
 }
 
 /** Минимальный контекст, если сбор данных пользователя упал — чат всё равно ответит через LLM/stub */
@@ -96,6 +111,11 @@ export class FinanceContextService {
     const now = dayjs();
     const monthStart = now.startOf('month').toDate();
     const monthEnd = now.endOf('month').toDate();
+
+    const userProfileRow = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, profileAge: true, financePurpose: true },
+    });
 
     // Get current month transactions
     const transactions = await this.prisma.transaction.findMany({
@@ -221,6 +241,42 @@ export class FinanceContextService {
       // Игнорируем ошибку — без курсов нейросеть просто скажет проверить источник
     }
 
+    // Тренд последних трёх календарных месяцев (агрегат по месяцам)
+    let monthlyTrend: FinanceContext['monthlyTrend'];
+    try {
+      const trendStart = now.subtract(2, 'month').startOf('month').toDate();
+      const trendTx = await this.prisma.transaction.findMany({
+        where: {
+          userId,
+          occurredAt: { gte: trendStart, lte: monthEnd },
+        },
+        select: { type: true, amount: true, occurredAt: true },
+      });
+      const bucket = new Map<string, { income: number; expense: number }>();
+      for (let i = 0; i < 3; i++) {
+        const key = now.subtract(2 - i, 'month').format('YYYY-MM');
+        bucket.set(key, { income: 0, expense: 0 });
+      }
+      for (const t of trendTx) {
+        const key = dayjs(t.occurredAt).format('YYYY-MM');
+        const b = bucket.get(key);
+        if (!b) continue;
+        const amt = Number(t.amount);
+        if (t.type === 'INCOME') b.income += amt;
+        else b.expense += amt;
+      }
+      monthlyTrend = [...bucket.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([yearMonth, v]) => ({
+          yearMonth,
+          income: v.income,
+          expense: v.expense,
+          net: v.income - v.expense,
+        }));
+    } catch {
+      monthlyTrend = undefined;
+    }
+
     return {
       currentMonth: {
         income,
@@ -254,12 +310,21 @@ export class FinanceContextService {
       })),
       portfolio: {
         totalCost: portfolioTotalCost,
-        totalCurrentValue: null, // Would need market data
+        totalCurrentValue: null,
         totalPnl: null,
         assetCount: portfolioAssetCount,
       },
       savingsRate,
       exchangeRates,
+      userProfile:
+        userProfileRow != null
+          ? {
+              displayName: userProfileRow.name,
+              profileAge: userProfileRow.profileAge,
+              financePurpose: userProfileRow.financePurpose,
+            }
+          : undefined,
+      monthlyTrend,
     };
   }
 }

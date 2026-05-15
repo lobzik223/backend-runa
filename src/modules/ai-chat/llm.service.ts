@@ -28,6 +28,8 @@ export class LLMService {
   private readonly grokModel = process.env.GROK_MODEL || 'grok-4-1-fast-reasoning';
   private readonly openaiApiKey = process.env.OPENAI_API_KEY;
   private readonly openaiModel = process.env.OPENAI_MODEL || 'gpt-5-nano';
+  /** Vision (анализ изображений) — только через OpenAI Chat Completions (мультимодальный). */
+  private readonly openaiVisionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
   /** Таймаут HTTP к Grok/OpenAI (мс). Долгие ответы без лимита дают обрыв на nginx/телефоне. */
   private readonly llmFetchTimeoutMs = Math.max(15000, Number(process.env.LLM_FETCH_TIMEOUT_MS) || 120000);
   /** Максимум токенов в ответе (Grok/OpenAI). */
@@ -45,7 +47,9 @@ export class LLMService {
     this.logger.log(
       `[LLM Service] Grok API key: ${this.grokApiKey ? 'SET' : 'NOT SET'}, model: ${this.grokModel}, max_out=${this.maxOutputTokens}, temp=${this.temperature}`,
     );
-    this.logger.log(`[LLM Service] OPENAI_API_KEY: ${this.openaiApiKey ? 'SET' : 'NOT SET'}`);
+    this.logger.log(
+      `[LLM Service] OPENAI_API_KEY: ${this.openaiApiKey ? 'SET' : 'NOT SET'}, vision_model=${this.openaiVisionModel}`,
+    );
     if (this.grokApiKey) {
       this.logger.log(`[LLM Service] ✅ Grok (xAI) настроен — общение, анализ, тактики по финансам`);
     } else if (this.openaiApiKey) {
@@ -79,15 +83,50 @@ export class LLMService {
     webSearchResults: WebSearchResult[] = [],
     preferredLanguage?: 'ru' | 'en',
     conversationHistory: LlmConversationTurn[] = [],
+    options?: {
+      vision?: { mime: string; base64: string };
+      compactOutput?: boolean;
+    },
   ): Promise<LLMResponse> {
-    const responseLanguage = preferredLanguage ?? this.detectResponseLanguage(userMessage);
+    const responseLanguage =
+      preferredLanguage ?? this.detectResponseLanguage(userMessage || 'фото');
     const turns =
       conversationHistory.length > 0
         ? conversationHistory
         : [{ role: 'user' as const, content: userMessage }];
+    const vision = options?.vision;
     this.logger.log(
-      `[LLM] responseLanguage=${responseLanguage} (preferred=${preferredLanguage ?? 'auto'}), historyTurns=${turns.length}`,
+      `[LLM] responseLanguage=${responseLanguage} (preferred=${preferredLanguage ?? 'auto'}), historyTurns=${turns.length}, vision=${!!vision}`,
     );
+
+    if (vision?.base64?.length && vision.mime) {
+      if (!this.openaiApiKey) {
+        throw new Error(
+          'Анализ фотографии недоступен: для vision настройте OPENAI_API_KEY на сервере.',
+        );
+      }
+      const maxCompact =
+        Math.min(
+          1024,
+          Math.max(
+            384,
+            Number(process.env.AI_CHAT_FREE_VISION_MAX_TOKENS) || 576,
+          ),
+        );
+      const maxOut = options?.compactOutput ? maxCompact : this.maxOutputTokens;
+      this.logger.log(`[LLM] Vision branch: compact=${options?.compactOutput}, max_tokens=${maxOut}`);
+      return this.callOpenAiVisionChat(
+        structuredOutputs,
+        financeContext,
+        webSearchResults,
+        responseLanguage,
+        turns,
+        vision.mime,
+        vision.base64,
+        maxOut,
+        options?.compactOutput === true,
+      );
+    }
 
     const useGrok = !!this.grokApiKey;
     const useOpenAI = !!this.openaiApiKey;
@@ -174,82 +213,55 @@ ${webSearchResults.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}
         : `
 🌐 ПОИСК В ИНТЕРНЕТЕ: в этом запросе сниппеты поиска не подставлялись (на сервере может быть не задан SERPER_API_KEY). Для ставок ЦБ, курсов, новостей банков и точных условий продуктов называй только данные из блока курсов ЦБ ниже и из приложения пользователя; для остального предлагай проверить официальный сайт банка или cbr.ru и не выдумывай цифры.`;
 
+    const profile = ctx.userProfile as
+      | { displayName?: string; profileAge?: number | null; financePurpose?: string | null }
+      | undefined;
+    const profileBlock =
+      profile != null
+        ? `
+ПРОФИЛЬ (указано пользователем при регистрации / в настройках; используй для контекста и тона, без назойливых отсылок «я вижу твой возраст»):
+- Имя в приложении: ${(profile.displayName || 'не указано').trim()}
+- Возраст (лет): ${profile.profileAge != null ? String(profile.profileAge) : 'не указан'}
+- Заявленная цель / чем занимается в приложении: ${profile.financePurpose?.trim() ? profile.financePurpose.trim() : 'не указано'}
+`
+        : '';
+
     return `
-Вы — RUNA, персональный финансовый ассистент в приложении RUNA Finance. Сегодняшняя дата: ${new Date().toLocaleDateString('ru-RU')}, 2026 год.
+Ты — RUNA: честный, максимально полезный финансовый помощник в приложении Runa Finance. Сегодня: ${new Date().toLocaleDateString('ru-RU')}, календарный год 2026.
 ${searchBlock}
+${profileBlock}
 
-МИССИЯ:
-Помогать пользователю (целевая аудитория 18–30 лет) экономить деньги каждый день, развивать финансовую дисциплину и превращать финансовые действия в привычку с видимым результатом.
+ГЛАВНАЯ ЗАДАЧА:
+Глубоко опираться на цифры и факты из данных пользователя ниже. Давать только реальные, конкретные рекомендации. Никакой воды, токсичной мотивации, общих фраз, «бизнес-режима», стикеров и лишней болтовни. Сначала мысленно сверь транзакции, категории, цели и долги; в ответе не раскрывай внутренний ход мыслей — только ясный результат по запросу.
 
-КОМПЕТЕНЦИЯ (отвечай развёрнуто и по существу):
-- Банкинг и платежи: счета, карты (дебет/кредит), переводы, СБП, комиссии, лимиты, безопасность платежей.
-- Кредиты и займы: ипотека, потребительские кредиты, рефинансирование, график платежей, досрочное погашение (общие принципы, без обещаний).
-- Накопления: вклады, накопительные счета, подушка безопасности, цели — в связке с данными пользователя в приложении.
-- Регуляторика и ориентиры: ЦБ РФ, страхование вкладов (общие сведения), официальные источники для фактов.
-- Налоги и учёт личных финансов — в бытовом, понятном виде (не замена бухгалтеру/юристу).
-Если вопрос про банки/продукты/ставки — опирайся на блок поиска и официальные источники; не выдумывай ставки и условия.
+ИСТОЧНИКИ ДОХОДА:
+Про структуру доходов суди только по тем данным, что есть в приложении (категории доходов, операции, суммы). Не выдумывай работодателя или подработки. Если пользователь спрашивает «откуда доход», опиши, что видно по учёту, и честно отметь пробелы.
 
-РАЗНООБРАЗИЕ И СТИЛЬ ДИАЛОГА:
-- Не повторяй одни и те же шаблонные фразы из ответа в ответ. Меняй структуру: то короткий ответ с буллетами, то связный абзац, то шаги 1–2–3.
-- Уточняй, если не хватает данных; предлагай гипотезы с оговоркой «если…».
-- Проявляй «живое» мышление: сравнения, оговорки по рискам, альтернативы — без канцелярита и без одного и того же вступления каждый раз.
+КАРЬЕРА, ФРИЛАНС, ПОИСК КЛИЕНТОВ:
+Подключай советы про фриланс, смену работы, выход на заказы, профессию только если пользователь явно об этом просит (например: заработать, фриланс, подработка, клиенты, заказы, резюме, удалёнка). Иначе ограничивайся финансовым учётом, бюджетом, тратами, долгами и целями. Учитывай заявленную цель и контекст транзакций, но не навязывай карьерную повестку.
 
-ОСНОВНЫЕ ПРАВИЛА:
-- Не давай директивных рекомендаций и не обещай доходность. Показывай последствия и альтернативы — помогай пользователю делать собственный выбор.
-- Каждое предложение — конкретный шаг к экономии, а не общий совет. Ежедневно предлагай 1–3 шага, которые реально приводят к экономии.
-- Визуализируй прогресс и маленькие победы: «Первый шаг выполнен», «Ты сэкономил X₽ сегодня/за неделю», «На этой неделе ты сэкономил X₽».
-- Учитывай привычки пользователя: мелкие ежедневные траты, неопытность в финансах, стремление к контролю. Показывай результат наглядно и в реальном времени.
+ПРАВИЛА:
+- Работай только с цифрами и фактами из блоков ниже и из поиска (если есть). Не хватает данных — прямо скажи и попроси уточнить.
+- Будь предельно честным: если ситуация тяжёлая — прямо, по‑дружески, без драмы.
+- В один ответ давай максимум 2–3 самых сильных действия, которые реально двигают ситуацию.
+- Структура ответа всегда одна и та же (можно краткие подзаголовки без Markdown-звёздочек):
+  1. Краткий диагноз (2–3 предложения).
+  2. Ключевые инсайты и цифры (с явными расчётами, где возможно).
+  3. Главные проблемы и риски.
+  4. Конкретные рекомендации с приоритетом 1 → 2 → 3.
+  5. 1–2 вопроса для уточнения — только если без них нельзя считать вывод надёжным.
 
-ЕЖЕДНЕВНЫЕ ШАГИ ЭКОНОМИИ (примеры формулировок):
-- «Переведи 100₽ на накопления»
-- «Отмени подписку X» (если видишь подписки в расходах)
-- «Сократи расходы на кофе сегодня на 150₽»
-- «Отложи 50₽ в копилку цели»
-Давай такие конкретные действия, опираясь на данные пользователя ниже.
+АНАЛИЗИРУЙ (когда релевантно к вопросу):
+- Структура доходов и расходов, крупные и малополезные категории трат.
+- Динамика за несколько месяцев: используй блок «ТРЕНД ПО МЕСЯЦАМ», если он есть; иначе только текущий месяц и последние операции.
+- Cash flow, риски дефицита, безубыточность по факту доход/расход за период с данными.
+- Налоговые следствия — только осторожно и в бытовой формулировке, без обещаний и без роли бухгалтера.
 
-ЛОГИКА АНАЛИЗА И СОПРОВОЖДЕНИЯ:
-При любом вопросе или действии пользователя: объясняй контекст и последствия; выделяй ключевые переменные (сумма, срок, риск, приоритет); показывай альтернативные сценарии и их последствия; указывай риски и ограничения; помогай сделать самостоятельный вывод, а не навязывай решение.
+СТИЛЬ:
+Сухой, прямой, профессиональный. Без маркета и без заголовков с «решёткой». Списки — через дефис или нумерация. Не используй ** для «жирного». Эмодзи не используй, если пользователь сам не попросил неформатный ответ.
 
-20 ФУНКЦИЙ RUNA (интегрированы в твою работу — используй их по контексту):
-1) Прогноз структуры и объёма расходов (история, сезонность)
-2) Анализ возможностей сокращения расходов — зоны оптимизации
-3) Оценка эффекта от финансовых изменений — сравнение сценариев
-4) Анализ инвестиционных направлений — различия классов активов
-5) Анализ рыночных сценариев — волатильность и ограничения
-6) Учёт обязательных и регулярных трат (подписки, кредиты, платежи)
-7) Финансовый профиль пользователя — доходы, расходы, дисциплина, риск
-8) Система ранних финансовых предупреждений — риски до проблем
-9) Сопровождение финансовых целей — реалистичность и влияние решений
-10) Контроль прогресса по целям — отклонения и корректировки
-11) Признаки финансового стресса — перегрузка бюджета, устойчивость
-12) Структура сбережений — ликвидность, доступность, доходность
-13) Сценарное моделирование — «что будет, если…»
-14) Генерация финансовых инсайтов — краткие выводы по данным
-15) Сравнение с агрегированными профилями — ориентиры без давления
-16) Детектор аномалий и нетипичных операций
-17) Диалоговый интерфейс — ответы на вопросы и аналитика
-18) Анализ стабильности и потенциала доходов
-19) Антикризисные сценарии — последствия негативных событий
-20) Расширенное сопровождение (PRO) — проактивная аналитика без директив
-
-СТИЛЬ И ТОН:
-Чёткий, спокойный, рациональный, современный, финансово грамотный. Без давления и обещаний. Персонализированный под привычки пользователя. Превращай финансовые действия в ежедневную привычку с видимым результатом. Избегай однообразных вступлений вроде «Конечно, помогу» в каждом сообщении.
-
-ЕЖЕДНЕВНАЯ ВИЗУАЛИЗАЦИЯ ПРОГРЕССА:
-Отмечай выполненные шаги («Первый шаг выполнен», «Шаг выполнен»). Показывай сумму сэкономленного: «Ты сэкономил 350₽ за сегодня», «На этой неделе ты сэкономил 2100₽», «За месяц — X₽». Маленькие победы мотивируют — используй их.
-
-ВАШИ ВОЗМОЖНОСТИ:
-- Общаться на русском: отвечать на вопросы, уточнять, поддерживать диалог
-- Анализировать состояние по реальным данным ниже: доходы, расходы, цели, кредиты, портфель
-- Генерировать тактики: как копить, куда сократить траты, как достичь целей, как гасить долги
-- Планирование бюджета, норма сбережений, предупреждения о рисках, конкретные шаги
-
-ПОВЕДЕНИЕ:
-- Всегда учитывай, что сейчас 2026 год. Используй актуальные даты для планирования и анализа.
-- Отвечай дружелюбно, но по делу, на русском языке. Опирайся на цифры из данных пользователя — суммы, категории, даты.
-- Давай практические советы и пошаговые тактики. При проблемах (перерасход, долги, недостижимые цели) мягко указывай и предлагай действия. Предлагай действия, которые пользователь может выполнить прямо сейчас.
-- ВАЖНО: Не используй Markdown (**текст**) или заголовки (#). Пиши чистым текстом, списки через дефис (-). Используй эмодзи для визуального разделения. Интерпретируй данные понятно.
-- При анализе прошлого и прогнозах опирайся на 2026 год и на данные ниже.
+КОМПЕТЕНЦИЯ:
+Банкинг, платежи, карты, кредиты (общие принципы, без обещаний), накопления и цели, личный бюджет, ориентиры ЦБ/официальные источники для фактов. Не давай инвестконсультаций с обещанием дохода.
 
 ДЕТАЛЬНЫЕ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ:
 
@@ -259,6 +271,16 @@ ${searchBlock}
 - Остаток: ${Number(currentMonth.net).toLocaleString('ru-RU')} ₽
 - Норма сбережений: ${ctx.savingsRate != null ? Number(ctx.savingsRate).toFixed(1) : '0'}%
 
+${
+  Array.isArray(ctx.monthlyTrend) && ctx.monthlyTrend.length > 0
+    ? `ТРЕНД ПО МЕСЯЦАМ (до 3 календарных месяцев, только из учёта):\n${ctx.monthlyTrend
+        .map(
+          (m: { yearMonth: string; income: number; expense: number; net: number }) =>
+            `- ${m.yearMonth}: доход ${Number(m.income).toLocaleString('ru-RU')} ₽, расход ${Number(m.expense).toLocaleString('ru-RU')} ₽, остаток ${Number(m.net).toLocaleString('ru-RU')} ₽`,
+        )
+        .join('\n')}\n`
+    : ''
+}
 💰 ТОП КАТЕГОРИЙ РАСХОДОВ:
 ${topExpenseCategories.length > 0
   ? topExpenseCategories.map((c: any, idx: number) =>
@@ -313,14 +335,12 @@ ${structuredOutputs.length > 0
   : 'Нет специальных рекомендаций'}
 
 ИНСТРУКЦИИ:
-- Если пользователь просит показать график/диаграмму, добавьте в ответ: [CHART_REQUEST: {"type": "DONUT", "title": "Анализ бюджета"}]
-- Всегда используйте реальные данные пользователя для расчетов
-- Будьте конкретны: называйте суммы, категории, даты
-- Предлагайте действия, которые пользователь может выполнить прямо сейчас
-- ПИШИТЕ БЕЗ ИСПОЛЬЗОВАНИЯ ** (ДВОЙНЫХ ЗВЕЗДОЧЕК).
-- КУРСЫ ВАЛЮТ: на вопросы про курс рубля к доллару/евро отвечай ТОЛЬКО цифрами из блока «АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ» выше; всегда указывай дату курса; никогда не подставляй курсы из своей обучающей выборки (иначе будут старые данные).
-- ФАКТЫ И ДАТЫ: для любых фактов, цифр, дат, событий используй ТОЛЬКО данные из блока «АКТУАЛЬНЫЕ ДАННЫЕ ИЗ ПОИСКА» (если он есть) и из данных пользователя; не давай примеры из головы и не используй старые знания из обучающей выборки.
-${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Cover banking, payments, credit, savings, and personal finance with the same rigor; vary phrasing and structure each time.' : '\nЯЗЫК ОТВЕТА: Отвечай ТОЛЬКО на русском языке. Весь твой ответ должен быть на русском.'}
+- График/диаграмма: только если пользователь явно просит визуализацию — тогда добавь в ответ: [CHART_REQUEST: {"type": "DONUT", "title": "Анализ бюджета"}]
+- Всегда используй суммы из данных ниже для расчётов; будь конкретен (категории, даты).
+- Не используй двойные звёздочки Markdown.
+- Курсы валют: только блок «АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ» ниже и дата; не подставляй курсы из памяти.
+- Факты вне приложения и курсов: только блок поиска, если он есть; иначе честно скажи, что данных нет.
+${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English, same five-part structure, same honesty and data rules.' : '\nЯЗЫК ОТВЕТА: только русский.'}
 `.trim();
   }
 
@@ -460,6 +480,155 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Cover banking
       },
       model: this.openaiModel,
     };
+  }
+
+  /**
+   * Мультимодальный запрос OpenAI — анализ изображений (видит чеки, текст на фото).
+   */
+  private async callOpenAiVisionChat(
+    structuredOutputs: AIStructuredOutput[],
+    financeContext: any,
+    webSearchResults: WebSearchResult[] = [],
+    responseLanguage: 'ru' | 'en' = 'ru',
+    conversationTurns: LlmConversationTurn[] = [],
+    imageMime: string,
+    imageBase64: string,
+    maxTokens: number,
+    compactAnswer: boolean,
+  ): Promise<LLMResponse> {
+    if (!this.openaiApiKey) {
+      throw new Error('OpenAI не настроен');
+    }
+    const systemPrompt = this.buildSystemPrompt(
+      structuredOutputs,
+      financeContext,
+      webSearchResults,
+      responseLanguage,
+    );
+    const visionHint = compactAnswer
+      ? '\n\n[Режим бесплатного тарифа: ответь максимально кратко — 2–5 коротких предложений или маркированный список, без длинных вступлений.]'
+      : '';
+    const dataUrl = `data:${imageMime};base64,${imageBase64.replace(/\s/g, '')}`;
+
+    const messages: Array<{ role: string; content: unknown }> = [
+      { role: 'system', content: systemPrompt },
+    ];
+
+    for (let i = 0; i < conversationTurns.length; i++) {
+      const t = conversationTurns[i];
+      if (!t) continue;
+      const isLastUser = t.role === 'user' && i === conversationTurns.length - 1;
+      if (!isLastUser) {
+        messages.push({ role: t.role, content: t.content });
+        continue;
+      }
+      const cap = (t.content || '').trim() || 'Пользователь прислал изображение без текста.';
+      messages.push({
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `${cap}${visionHint}\n\nПроанализируй изображение. Если это чек, выписка или документ по финансам — выдели суммы, даты и суть. Если не финансы — кратко опиши, что видишь. Пиши без **звёздочек** для жирного.`,
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: dataUrl,
+              detail: compactAnswer ? 'low' : 'auto',
+            },
+          },
+        ],
+      });
+    }
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.openaiApiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.openaiVisionModel,
+        messages,
+        temperature: Math.min(this.temperature, 0.9),
+        max_tokens: maxTokens,
+      }),
+      signal: AbortSignal.timeout(this.llmFetchTimeoutMs),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let errData: unknown;
+      try {
+        errData = JSON.parse(errText);
+      } catch {
+        errData = { message: errText || response.statusText };
+      }
+      this.logger.error(`[OpenAI Vision] API error (${response.status}): ${JSON.stringify(errData)}`);
+      throw new Error(`OpenAI Vision API error: ${JSON.stringify(errData)}`);
+    }
+
+    const rawBody = await response.text();
+    let data: {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      this.logger.error('[OpenAI Vision] Invalid JSON in response');
+      throw new Error('OpenAI Vision API returned invalid JSON');
+    }
+    const text =
+      data.choices?.[0]?.message?.content ||
+      'Не удалось прочитать ответ по изображению. Попробуйте другое фото.';
+
+    return {
+      text,
+      tokensUsed: {
+        input: data.usage?.prompt_tokens || 0,
+        output: data.usage?.completion_tokens || 0,
+      },
+      model: this.openaiVisionModel,
+    };
+  }
+
+  /**
+   * Распознавание речи (Whisper). Нужен OPENAI_API_KEY.
+   */
+  async transcribeAudioBuffer(buffer: Buffer, filename: string, mime?: string): Promise<string> {
+    if (!this.openaiApiKey) {
+      throw new Error('Голосовой ввод недоступен: задайте OPENAI_API_KEY на сервере.');
+    }
+    const form = new FormData();
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_') || 'audio.m4a';
+    const blob = new Blob([new Uint8Array(buffer)], {
+      type: mime || 'application/octet-stream',
+    });
+    form.append('file', blob, safeName);
+    form.append('model', 'whisper-1');
+    form.append('language', 'ru');
+
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.openaiApiKey}`,
+      },
+      body: form,
+      signal: AbortSignal.timeout(Math.min(120000, this.llmFetchTimeoutMs)),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      this.logger.error(`[Whisper] ${response.status}: ${errText}`);
+      throw new Error(`Whisper API error: ${errText || response.statusText}`);
+    }
+    const data = (await response.json()) as { text?: string };
+    const text = (data.text || '').trim();
+    if (!text.length) {
+      throw new Error('Не удалось распознать речь. Попробуйте говорить ближе к микрофону.');
+    }
+    return text;
   }
 
   private generateStubResponse(structuredOutputs: AIStructuredOutput[]): LLMResponse {

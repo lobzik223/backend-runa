@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "profile_age" INTEGER;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "finance_purpose" VARCHAR(160);

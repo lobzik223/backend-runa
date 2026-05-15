@@ -13,7 +13,7 @@ import * as argon2 from 'argon2';
 import * as crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import * as jwt from 'jsonwebtoken';
-import type { EmailVerificationCode } from '@prisma/client';
+import { Prisma, type EmailVerificationCode } from '@prisma/client';
 import { env } from '../../config/env.validation';
 import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -1047,6 +1047,8 @@ export class AuthService {
         id: true,
         email: true,
         name: true,
+        profileAge: true,
+        financePurpose: true,
         createdAt: true,
         trialUntil: true,
         premiumUntil: true,
@@ -1077,6 +1079,8 @@ export class AuthService {
         id: user.id,
         email: user.email ?? '',
         name: user.name,
+        profileAge: user.profileAge ?? null,
+        financePurpose: user.financePurpose ?? null,
         createdAt: user.createdAt,
         trialUntil: user.trialUntil,
         premiumUntil: user.premiumUntil,
@@ -1351,7 +1355,17 @@ export class AuthService {
 
     if (!user) throw new UnauthorizedException('Пользователь не найден');
 
-    if (dto.name) {
+    const data: Prisma.UserUpdateInput = {};
+
+    if (dto.profileAge !== undefined && dto.profileAge !== null) {
+      data.profileAge = dto.profileAge;
+    }
+    const purposeTrimmed = dto.financePurpose?.trim();
+    if (purposeTrimmed) {
+      data.financePurpose = purposeTrimmed.slice(0, 160);
+    }
+
+    if (dto.name && dto.name.trim().length > 0) {
       const now = new Date();
       const isFirstChange = (user.nameChangeCount ?? 0) === 0;
 
@@ -1367,13 +1381,15 @@ export class AuthService {
         }
       }
 
+      data.name = dto.name.trim();
+      data.nameUpdatedAt = now;
+      data.nameChangeCount = (user.nameChangeCount ?? 0) + 1;
+    }
+
+    if (Object.keys(data).length > 0) {
       await this.prisma.user.update({
         where: { id: userId },
-        data: {
-          name: dto.name.trim(),
-          nameUpdatedAt: now,
-          nameChangeCount: (user.nameChangeCount ?? 0) + 1,
-        },
+        data,
       });
     }
 
