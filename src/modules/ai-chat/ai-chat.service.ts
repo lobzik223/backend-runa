@@ -61,10 +61,10 @@ export class AIChatService {
     1000,
     Number(process.env.AI_CHAT_FREE_TOKEN_LIMIT) || 20000,
   );
-  /** Анализов фото за сутки на Free */
+  /** Анализов фото за сутки на Free (override: AI_CHAT_FREE_VISION_PER_DAY) */
   private readonly FREE_TIER_VISION_PER_DAY = Math.max(
     1,
-    Number(process.env.AI_CHAT_FREE_VISION_PER_DAY) || 3,
+    Number(process.env.AI_CHAT_FREE_VISION_PER_DAY) || 5,
   );
   private readonly LLM_HISTORY_MAX_MESSAGES = Math.min(
     64,

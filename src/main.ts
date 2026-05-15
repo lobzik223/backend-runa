@@ -12,7 +12,10 @@ async function bootstrap() {
   const corsOrigins = env.CORS_ORIGIN === '*'
     ? true
     : [...env.CORS_ORIGIN.split(',').map((o) => o.trim()), 'https://runafinance.online', 'https://panel.runafinance.online'].filter(Boolean);
+  /** AI chat: base64-картинка в JSON тянет тело запроса; дефолт Express 100kb ломает /ai/chat. */
+  const jsonBodyLimit = process.env.JSON_BODY_LIMIT || '25mb';
   const app = await NestFactory.create(AppModule, {
+    bodyParser: false,
     cors: {
       origin: corsOrigins,
       credentials: true,
@@ -20,6 +23,8 @@ async function bootstrap() {
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Runa-App-Key', 'X-Runa-Site-Key'],
     },
   });
+  app.use(express.json({ limit: jsonBodyLimit }));
+  app.use(express.urlencoded({ extended: true, limit: jsonBodyLimit }));
 
   app.use(
     helmet({
