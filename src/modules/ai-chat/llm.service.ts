@@ -35,7 +35,7 @@ export class LLMService {
   /** Максимум токенов в ответе (Grok/OpenAI). */
   private readonly maxOutputTokens = Math.min(
     8192,
-    Math.max(256, Number(process.env.LLM_MAX_OUTPUT_TOKENS) || 2048),
+    Math.max(256, Number(process.env.LLM_MAX_OUTPUT_TOKENS) || 1536),
   );
   /** Креативность формулировок (0–2). Выше — разнообразнее ответы. */
   private readonly temperature = Math.min(
@@ -182,7 +182,36 @@ export class LLMService {
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
     responseLanguage: 'ru' | 'en' = 'ru',
+    conversationTurns: LlmConversationTurn[] = [],
   ): string {
+    const userTurns = conversationTurns.filter((t) => t.role === 'user').length;
+    const isStartOfDialogue = userTurns <= 1;
+    const greetingBlockRu =
+      responseLanguage === 'ru' && isStartOfDialogue
+        ? `
+ПРИВЕТСТВИЕ В НАЧАЛЕ:
+Если в ЭТОМ сообщении пользователь не поздоровался (нет нормального «привет», «здравствуй», «добрый день» и т.п.) — начни ответ с одной короткой тёплой фразы-приветствия (до одного предложения), затем сразу переходи к сути вопроса. Если пользователь уже поздоровался — не расписывай привет повторно.`
+        : '';
+    const greetingBlockEn =
+      responseLanguage === 'en' && isStartOfDialogue
+        ? `
+OPENING: If the user did not greet (no hi/hello/good morning etc.), start with one short friendly greeting, then answer. If they already greeted, do not repeat a long hello.`
+        : '';
+    const greetingBlock = greetingBlockRu || greetingBlockEn;
+    const lengthBlock =
+      responseLanguage === 'ru'
+        ? `
+ДЛИНА И СТИЛЬ ОТВЕТА:
+- По умолчанию пиши сжато и по делу: ориентир до ~6–14 предложений или два коротких абзаца; сначала вывод и ключевые цифры, без «простыней» и без повторов одной мысли разными словами.
+- Точность и ясность важнее объёма.
+- Развёрнуто (структура с подзаголовками, пошаговый разбор, длинное объяснение) — только если вопрос действительно сложный / многофакторный, или пользователь явно просит «подробно», «распиши», «полный разбор», «по пунктам детально».
+`
+        : `
+RESPONSE LENGTH:
+- Default: concise (roughly 6–14 sentences or two short paragraphs). Lead with takeaway and key numbers; no walls of text unless needed.
+- Go long with clear sections only for genuinely complex questions or when the user explicitly asks for detail.
+`;
+
     const ctx = financeContext ?? {};
     const recentTransactions = Array.isArray(ctx.recentTransactions) ? ctx.recentTransactions : [];
     const currentMonth = ctx.currentMonth ?? { income: 0, expense: 0, net: 0 };
@@ -230,6 +259,8 @@ ${webSearchResults.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}
 Ты — RUNA: честный, максимально полезный финансовый помощник в приложении Runa Finance. Сегодня: ${new Date().toLocaleDateString('ru-RU')}, календарный год 2026.
 ${searchBlock}
 ${profileBlock}
+${greetingBlock}
+${lengthBlock}
 
 РЕЖИМ ПРОСТОГО ДИАЛОГА (обязателен, если к запросу это подходит):
 Если сообщение пользователя — короткое приветствие, благодарность, «как дела», бытовая ремарка или эмоция БЕЗ просьбы про деньги, цифры, чек, бюджет и анализ (например: «привет», «спасибо», «ладно», «ок») — ответь по‑человечески: 1–3 коротких предложения, тёплый ненавязчивый тон. НЕ выдавай большой отчёт, НЕ перечисляй нули по доходам/расходам и блоки «Ключевые цифры», пока пользователь сам не попросил разобрать финансы или не задал вопрос про учёт. Можно в конце одним предложением напомнить, что ты помогаешь с финансами в Runa, без давления.
@@ -338,7 +369,7 @@ ${structuredOutputs.length > 0
 - Не используй двойные звёздочки Markdown.
 - Курсы валют: только блок «АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ» ниже и дата; не подставляй курсы из памяти.
 - Факты вне приложения и курсов: только блок поиска, если он есть; иначе честно скажи, что данных нет.
-${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English, same five-part structure, same honesty and data rules.' : '\nЯЗЫК ОТВЕТА: только русский.'}
+${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Default to concise replies; expand only when the topic is genuinely complex or the user asks for detail. Same data honesty rules.' : '\nЯЗЫК ОТВЕТА: только русский.'}
 `.trim();
   }
 
@@ -353,7 +384,13 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English, same five-par
       throw new Error('Grok не настроен: задайте GROK_API_KEY или XAI_API_KEY в .env');
     }
 
-    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults, responseLanguage);
+    const systemPrompt = this.buildSystemPrompt(
+      structuredOutputs,
+      financeContext,
+      webSearchResults,
+      responseLanguage,
+      conversationTurns,
+    );
 
     const chatMessages = [
       { role: 'system' as const, content: systemPrompt },
@@ -426,7 +463,13 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English, same five-par
     responseLanguage: 'ru' | 'en' = 'ru',
     conversationTurns: LlmConversationTurn[] = [],
   ): Promise<LLMResponse> {
-    const systemPrompt = this.buildSystemPrompt(structuredOutputs, financeContext, webSearchResults, responseLanguage);
+    const systemPrompt = this.buildSystemPrompt(
+      structuredOutputs,
+      financeContext,
+      webSearchResults,
+      responseLanguage,
+      conversationTurns,
+    );
 
     const chatMessages = [
       { role: 'system' as const, content: systemPrompt },
@@ -502,6 +545,7 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English, same five-par
       financeContext,
       webSearchResults,
       responseLanguage,
+      conversationTurns,
     );
     const visionHint = compactAnswer
       ? '\n\n[Режим бесплатного тарифа: ответь максимально кратко — 2–5 коротких предложений или маркированный список, без длинных вступлений.]'
