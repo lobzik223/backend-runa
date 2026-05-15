@@ -8,8 +8,9 @@ ALTER TABLE "payment_methods" ADD COLUMN IF NOT EXISTS "design" VARCHAR(64);
 ALTER TABLE "payment_methods" ADD COLUMN IF NOT EXISTS "cover_image_key" VARCHAR(512);
 ALTER TABLE "payment_methods" ADD COLUMN IF NOT EXISTS "card_currency" VARCHAR(8);
 
-CREATE INDEX IF NOT EXISTS "payment_methods_user_id_client_id_idx" ON "payment_methods"("user_id", "client_id");
+-- Колонка пользователя в Prisma — `userId` (camelCase), не `user_id`
+CREATE INDEX IF NOT EXISTS "payment_methods_user_id_client_id_idx" ON "payment_methods"("userId", "client_id");
 
 ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "client_reference_id" VARCHAR(128);
 
-CREATE UNIQUE INDEX IF NOT EXISTS "transactions_user_client_ref_unique" ON "transactions"("user_id", "client_reference_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "transactions_user_client_ref_unique" ON "transactions"("userId", "client_reference_id");
