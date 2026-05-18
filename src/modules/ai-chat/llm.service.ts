@@ -88,8 +88,12 @@ export class LLMService {
       compactOutput?: boolean;
     },
   ): Promise<LLMResponse> {
+    const trimmedMsg = (userMessage || '').trim();
+    /** Интерфейс клиента для подсказки в промпте (русское приложение по умолчанию) */
+    const clientLocalePreference = preferredLanguage === 'en' ? 'en' : 'ru';
+    /** Язык ответа: по тексту сообщения пользователя при непустом тексте иначе clientLocalePreference */
     const responseLanguage =
-      preferredLanguage ?? this.detectResponseLanguage(userMessage || 'фото');
+      trimmedMsg.length > 0 ? this.detectResponseLanguage(trimmedMsg) : clientLocalePreference;
     const turns =
       conversationHistory.length > 0
         ? conversationHistory
@@ -119,12 +123,12 @@ export class LLMService {
         structuredOutputs,
         financeContext,
         webSearchResults,
-        responseLanguage,
         turns,
         vision.mime,
         vision.base64,
         maxOut,
         options?.compactOutput === true,
+        clientLocalePreference,
       );
     }
 
@@ -144,8 +148,8 @@ export class LLMService {
           structuredOutputs,
           financeContext,
           webSearchResults,
-          responseLanguage,
           turns,
+          clientLocalePreference,
         );
       }
       if (useOpenAI) {
@@ -154,8 +158,8 @@ export class LLMService {
           structuredOutputs,
           financeContext,
           webSearchResults,
-          responseLanguage,
           turns,
+          clientLocalePreference,
         );
       }
       return this.generateStubResponse(structuredOutputs);
@@ -177,40 +181,84 @@ export class LLMService {
     }
   }
 
+  /**
+   * Единый контракт ответов RUNA AI на английском (все модели стабильно следуют ему);
+   * фактический текст ответа пользователю — на языке последнего сообщения (см. LANGUAGE RULE).
+   */
+  private buildRunaAiInternationalContract(
+    isStartOfDialogue: boolean,
+    uiPreferredLanguage: 'ru' | 'en',
+  ): string {
+    const greetPolicy = isStartOfDialogue
+      ? `GREETING (only on the first user turn of this server thread; NEVER repeat the same template mid-thread):
+If the user already clearly greeted, skip a stock hello and answer.
+If they did NOT greet, you MAY open with ONE short line in THEIR language, then go straight to substance.
+Russian template (ONLY if your reply is Russian and they did not greet): "Привет, я RUNA AI — чем могу помочь тебе сегодня? 💳" — this is the only routine where a single emoji is OK.`
+      : `GREETING: Do not re-open with a stock hello. Continue without duplicate greetings.`;
+
+    return `
+══════════════════════════════════════════════════════════════
+RUNA AI — RESPONSE CONTRACT (always obey; output language = LANGUAGE RULE below)
+══════════════════════════════════════════════════════════════
+IDENTITY:
+You are RUNA AI: a sharp, honest personal-finance copilot inside Runa Finance. Not a motivational speaker. Ground every claim about the user in USER DATA below (+ search snippets if present).
+
+UI LOCALE HINT: ${uiPreferredLanguage === 'en' ? 'client prefers English when ambiguous' : 'client prefers Russian when ambiguous'}.
+
+LANGUAGE RULE (critical — all languages):
+Respond in the SAME natural language as the user's latest message. Cyrillic / Russian app context → Russian unless they clearly write otherwise.
+If they write chiefly in English or another language, mirror that language consistently for the whole reply (including disclaimers). Do not blend languages unless the user does.
+
+${greetPolicy}
+
+TOKENS & SHAPE:
+Every sentence must earn its tokens. Start with the answer — not with generic acknowledgment.
+• Casual / thanks / tiny prompts → 1–3 short sentences; match user brevity roughly.
+• Simple data question from USER DATA → direct answer + at most ONE crisp extra insight.
+• Large analysis (many tx, long window) → structured sections with CLEAR PLAIN-TEXT HEADINGS (no Markdown #, no **bold** asterisks); strip filler; bullets; round numbers; percentages for ratios when helpful.
+
+FORBIDDEN FILLER (any language, including paraphrases): "Отличный вопрос", "Great question", "Конечно", "Certainly", "Glad to help today", "Я рад помочь" without adding information.
+
+AGE (from PROFILE when present):
+Adapt depth and tone subtly: 18–24 basics without condescension; 25–34 career/savings balance; 35–49 family + risk awareness; 50+ preservation/consistency. Never say "because of your age".
+
+BEHAVIORAL HINTS FROM DATA:
+Silently notice patterns (recurring debits, spikes, avoidance) but NEVER diagnose the person ("you have impulse issues"). Frame as observations + one optional question ("по пятницам X выше — посмотрим это?").
+
+CONTEXT 2025–2026 (general knowledge):
+You may use high-level context on rates, regulation, digital banking trends, BNPL, etc. For exact today numbers: prefer SEARCH SNIPPETS block; for RUB crosses (USD/EUR↔RUB) use ONLY the CBR block injected below — never hallucinate rates.
+
+STOCKS / CRYPTO / MACRO (education + framing only):
+Explain sectors, correlations, regime changes in plain words. NEVER "buy/sell ticker X". When discussing instruments or news impact, end with a disclaimer in the user's language (RU: «Это не инвестиционный совет», EN: "This is not investment advice.").
+If mapping news → market moves, you may use: short horizon, medium horizon, likely assets, CONFIDENCE: LOW|MEDIUM|HIGH + same disclaimer.
+
+"PERSONAL HEALTH CHECK" STYLE (when asked how they are doing with money):
+Income line from USER DATA; top ~5 expense buckets with % of income if meaningful; savings vs last month vs 3-mo if data allows; ONE risk; ONE quick win. Bullets preferred.
+
+RECURRING / ANOMALY / BENCHMARKS:
+Flag forgotten-style recurring charges gently. Flag one-off large "Прочее" with a single clarifying ask. 50/30/20 etc. only as rules of thumb — label as such.
+
+CUT-COST SCENARIO (only if user asks and USER DATA supports it):
+Title + quick / medium / structural steps with ₽ delta tied to real categories; skip micro-categories under ~2% of spend unless user insists.
+
+SINGLE CLARIFYING QUESTION:
+At most ONE when you truly cannot answer; not a checklist.
+
+TRUTH & PRIVACY:
+Never invent transactions. If missing data, say what is missing. Describe as "по твоим операциям в этом периоде в приложении" — do not claim long-term memory storage.
+══════════════════════════════════════════════════════════════
+`.trim();
+  }
+
   private buildSystemPrompt(
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
-    responseLanguage: 'ru' | 'en' = 'ru',
+    clientLocalePreference: 'ru' | 'en' = 'ru',
     conversationTurns: LlmConversationTurn[] = [],
   ): string {
     const userTurns = conversationTurns.filter((t) => t.role === 'user').length;
     const isStartOfDialogue = userTurns <= 1;
-    const greetingBlockRu =
-      responseLanguage === 'ru' && isStartOfDialogue
-        ? `
-ПРИВЕТСТВИЕ В НАЧАЛЕ:
-Если в ЭТОМ сообщении пользователь не поздоровался (нет нормального «привет», «здравствуй», «добрый день» и т.п.) — начни ответ с одной короткой тёплой фразы-приветствия (до одного предложения), затем сразу переходи к сути вопроса. Если пользователь уже поздоровался — не расписывай привет повторно.`
-        : '';
-    const greetingBlockEn =
-      responseLanguage === 'en' && isStartOfDialogue
-        ? `
-OPENING: If the user did not greet (no hi/hello/good morning etc.), start with one short friendly greeting, then answer. If they already greeted, do not repeat a long hello.`
-        : '';
-    const greetingBlock = greetingBlockRu || greetingBlockEn;
-    const lengthBlock =
-      responseLanguage === 'ru'
-        ? `
-ДЛИНА И СТИЛЬ ОТВЕТА:
-- По умолчанию пиши сжато и по делу: ориентир до ~6–14 предложений или два коротких абзаца; сначала вывод и ключевые цифры, без «простыней» и без повторов одной мысли разными словами.
-- Точность и ясность важнее объёма.
-- Развёрнуто (структура с подзаголовками, пошаговый разбор, длинное объяснение) — только если вопрос действительно сложный / многофакторный, или пользователь явно просит «подробно», «распиши», «полный разбор», «по пунктам детально».
-`
-        : `
-RESPONSE LENGTH:
-- Default: concise (roughly 6–14 sentences or two short paragraphs). Lead with takeaway and key numbers; no walls of text unless needed.
-- Go long with clear sections only for genuinely complex questions or when the user explicitly asks for detail.
-`;
 
     const ctx = financeContext ?? {};
     const recentTransactions = Array.isArray(ctx.recentTransactions) ? ctx.recentTransactions : [];
@@ -259,8 +307,7 @@ ${webSearchResults.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}\n${r.link}
 Ты — RUNA: честный, максимально полезный финансовый помощник в приложении Runa Finance. Сегодня: ${new Date().toLocaleDateString('ru-RU')}, календарный год 2026.
 ${searchBlock}
 ${profileBlock}
-${greetingBlock}
-${lengthBlock}
+${this.buildRunaAiInternationalContract(isStartOfDialogue, clientLocalePreference)}
 
 РЕЖИМ ПРОСТОГО ДИАЛОГА (обязателен, если к запросу это подходит):
 Если сообщение пользователя — короткое приветствие, благодарность, «как дела», бытовая ремарка или эмоция БЕЗ просьбы про деньги, цифры, чек, бюджет и анализ (например: «привет», «спасибо», «ладно», «ок») — ответь по‑человечески: 1–3 коротких предложения, тёплый ненавязчивый тон. НЕ выдавай большой отчёт, НЕ перечисляй нули по доходам/расходам и блоки «Ключевые цифры», пока пользователь сам не попросил разобрать финансы или не задал вопрос про учёт. Можно в конце одним предложением напомнить, что ты помогаешь с финансами в Runa, без давления.
@@ -287,7 +334,7 @@ ${lengthBlock}
 - Налоговые следствия — только осторожно и в бытовой формулировке, без обещаний и без роли бухгалтера.
 
 СТИЛЬ:
-Сухой, прямой, профессиональный. Без маркета и без заголовков с «решёткой». Списки — через дефис или нумерация. Не используй ** для «жирного». Эмодзи не используй, если пользователь сам не попросил неформатный ответ.
+Сухой, прямой, профессиональный. Без маркета и без заголовков с «решёткой». Списки — через дефис или нумерация. Не используй ** для «жирного». Эмодзи: только разовое приветствие из RUNA AI — RESPONSE CONTRACT; иначе без эмодзи, пока пользователь сам не попросит неформальный формат.
 
 КОМПЕТЕНЦИЯ:
 Банкинг, платежи, карты, кредиты (общие принципы, без обещаний), накопления и цели, личный бюджет, ориентиры ЦБ/официальные источники для фактов. Не давай инвестконсультаций с обещанием дохода.
@@ -369,7 +416,12 @@ ${structuredOutputs.length > 0
 - Не используй двойные звёздочки Markdown.
 - Курсы валют: только блок «АКТУАЛЬНЫЕ КУРСЫ ЦБ РФ» ниже и дата; не подставляй курсы из памяти.
 - Факты вне приложения и курсов: только блок поиска, если он есть; иначе честно скажи, что данных нет.
-${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Default to concise replies; expand only when the topic is genuinely complex or the user asks for detail. Same data honesty rules.' : '\nЯЗЫК ОТВЕТА: только русский.'}
+
+ЯЗЫК ОТВЕТА (приоритет):
+1) Язык последнего сообщения пользователя — главный сигнал (русский, английский, другой).
+2) Если однозначно непонятно — ориентир на UI LOCALE из контракта RUNA AI выше.
+Не смешивай языки в одном ответе без запроса пользователя.
+Контракт RUNA AI — RESPONSE CONTRACT обязателен по смыслу на любых языках.
 `.trim();
   }
 
@@ -377,8 +429,8 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Default to co
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
-    responseLanguage: 'ru' | 'en' = 'ru',
     conversationTurns: LlmConversationTurn[] = [],
+    clientLocalePreference: 'ru' | 'en' = 'ru',
   ): Promise<LLMResponse> {
     if (!this.grokApiKey) {
       throw new Error('Grok не настроен: задайте GROK_API_KEY или XAI_API_KEY в .env');
@@ -388,7 +440,7 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Default to co
       structuredOutputs,
       financeContext,
       webSearchResults,
-      responseLanguage,
+      clientLocalePreference,
       conversationTurns,
     );
 
@@ -460,14 +512,14 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Default to co
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
-    responseLanguage: 'ru' | 'en' = 'ru',
     conversationTurns: LlmConversationTurn[] = [],
+    clientLocalePreference: 'ru' | 'en' = 'ru',
   ): Promise<LLMResponse> {
     const systemPrompt = this.buildSystemPrompt(
       structuredOutputs,
       financeContext,
       webSearchResults,
-      responseLanguage,
+      clientLocalePreference,
       conversationTurns,
     );
 
@@ -530,12 +582,12 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Default to co
     structuredOutputs: AIStructuredOutput[],
     financeContext: any,
     webSearchResults: WebSearchResult[] = [],
-    responseLanguage: 'ru' | 'en' = 'ru',
     conversationTurns: LlmConversationTurn[] = [],
     imageMime: string,
     imageBase64: string,
     maxTokens: number,
     compactAnswer: boolean,
+    clientLocalePreference: 'ru' | 'en' = 'ru',
   ): Promise<LLMResponse> {
     if (!this.openaiApiKey) {
       throw new Error('OpenAI не настроен');
@@ -544,7 +596,7 @@ ${responseLanguage === 'en' ? '\nLANGUAGE: Answer ONLY in English. Default to co
       structuredOutputs,
       financeContext,
       webSearchResults,
-      responseLanguage,
+      clientLocalePreference,
       conversationTurns,
     );
     const visionHint = compactAnswer
