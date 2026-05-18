@@ -63,4 +63,8 @@ export class UpdateCreditAccountDto {
   @IsDateString()
   @IsOptional()
   closedAt?: string;
+
+  @IsDateString()
+  @IsOptional()
+  maturityAt?: string;
 }

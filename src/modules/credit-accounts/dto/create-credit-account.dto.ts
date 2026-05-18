@@ -59,4 +59,8 @@ export class CreateCreditAccountDto {
   @IsDateString()
   @IsOptional()
   openedAt?: string;
+
+  @IsDateString()
+  @IsOptional()
+  maturityAt?: string;
 }

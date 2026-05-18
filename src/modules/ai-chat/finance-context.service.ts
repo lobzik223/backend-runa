@@ -47,6 +47,7 @@ export interface FinanceContext {
     currentDebt: number;
     creditLimit?: number | null;
     nextPaymentDate?: Date | null;
+    maturityDate?: Date | null;
   }>;
 
   // Investment portfolio summary
@@ -307,6 +308,7 @@ export class FinanceContextService {
         currentDebt: Number(ca.currentBalance),
         creditLimit: ca.creditLimit ? Number(ca.creditLimit) : null,
         nextPaymentDate: ca.nextPaymentAt,
+        maturityDate: ca.maturityAt,
       })),
       portfolio: {
         totalCost: portfolioTotalCost,

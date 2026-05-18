@@ -58,6 +58,7 @@ export class CreditAccountsService {
           nextPaymentAt,
           minimumPayment: dto.minimumPayment,
           openedAt: dto.openedAt ? new Date(dto.openedAt) : null,
+          maturityAt: dto.maturityAt ? new Date(dto.maturityAt) : null,
         },
       });
 
@@ -177,6 +178,7 @@ export class CreditAccountsService {
           ...(dto.minimumPayment !== undefined && { minimumPayment: dto.minimumPayment }),
           ...(dto.openedAt !== undefined && { openedAt: dto.openedAt ? new Date(dto.openedAt) : null }),
           ...(dto.closedAt !== undefined && { closedAt: dto.closedAt ? new Date(dto.closedAt) : null }),
+          ...(dto.maturityAt !== undefined && { maturityAt: dto.maturityAt ? new Date(dto.maturityAt) : null }),
         },
       });
 

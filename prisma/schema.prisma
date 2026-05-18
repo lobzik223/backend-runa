@@ -489,6 +489,9 @@ model CreditAccount {
   nextPaymentAt DateTime?
   minimumPayment Decimal? @db.Decimal(18, 2)
 
+  /// Дата окончания договора по LOAN (последний возможный платёж по календарю). Для CREDIT_CARD не используется.
+  maturityAt DateTime?
+
   openedAt DateTime?
   closedAt DateTime?
 

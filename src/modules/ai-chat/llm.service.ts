@@ -388,8 +388,10 @@ ${creditAccounts.length > 0
       const limitAmount = ca.creditLimit != null ? Number(ca.creditLimit).toLocaleString('ru-RU') : '';
       const limitText = ca.creditLimit != null ? ` (лимит ${limitAmount} ₽)` : '';
       const paymentDate = ca.nextPaymentDate ? new Date(ca.nextPaymentDate).toLocaleDateString('ru-RU') : '';
-      const paymentText = ca.nextPaymentDate ? ` (платеж ${paymentDate})` : '';
-      return `- ${ca.name}: долг ${Number(ca.currentDebt).toLocaleString('ru-RU')} ₽${limitText}${paymentText}`;
+      const paymentText = ca.nextPaymentDate ? ` (платёж ${paymentDate})` : '';
+      const endDate = ca.maturityDate ? new Date(ca.maturityDate).toLocaleDateString('ru-RU') : '';
+      const endText = ca.maturityDate ? ` (до ${endDate})` : '';
+      return `- ${ca.name}: долг ${Number(ca.currentDebt).toLocaleString('ru-RU')} ₽${limitText}${paymentText}${endText}`;
     }).join('\n')
   : 'Нет кредитов'}
 
